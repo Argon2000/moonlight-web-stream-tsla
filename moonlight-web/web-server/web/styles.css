@@ -10,6 +10,10 @@ body.stream {
     overscroll-behavior: none !important;
 }
 
+h1 {
+    color: white;
+}
+
 h2,
 h3 {
     margin-top: 12px;
@@ -33,6 +37,8 @@ input[type="file"] {
 label {
     cursor: default;
     margin-right: 5px;
+    margin-left: 5px;
+    color: white;
 }
 
 /** Button */
@@ -136,6 +142,37 @@ select option {
     background-color: rgb(66, 66, 66);
 }
 
+/** Select Buttons */
+.select-button-group {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin: 5px;
+}
+
+.select-button {
+    background-color: rgb(66, 66, 66);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    margin: 0;
+}
+
+.select-button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+    border-color: rgb(255, 255, 255, 0.7);
+    box-shadow: none;
+}
+
+.select-button.selected {
+    background-color: rgba(63, 81, 181, 1.0);
+    border-color: rgba(63, 81, 181, 1.0);
+}
+
+.select-button.selected:hover {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
 /** Hide the number up down thingy on number inputs */
 input::-webkit-outer-spin-button,
 input::-webkit-inner-spin-button {
@@ -176,6 +213,13 @@ input[type=number] {
     border-radius: 5px;
 
     width: 80%;
+    max-width: 500px;
+
+    color: white;
+}
+
+.stream .modal-content {
+    max-width: none;
 }
 
 .modal-disabled {
@@ -213,6 +257,7 @@ input[type=number] {
     /** animation */
     transition: all 0.15s;
     background-color: rgba(255, 255, 255, 0);
+    color: white;
 }
 
 .context-menu-element:hover {
@@ -240,7 +285,6 @@ input[type=number] {
 .sidebar-background {
     display: flex;
     align-items: center;
-    gap: 5px;
     /** animation */
     transition: all 0.2s 0s linear;
 }
@@ -256,7 +300,7 @@ input[type=number] {
 
 .sidebar-edge-left .sidebar-background {
     flex-direction: row-reverse;
-    transform: translate(calc(-100% + 40px), -50%);
+    transform: translate(calc(-100% + 30px), -50%);
 }
 
 .sidebar-overlay.sidebar-edge-right {
@@ -266,7 +310,7 @@ input[type=number] {
 
 .sidebar-edge-right .sidebar-background {
     flex-direction: row;
-    transform: translate(calc(100% - 40px), -50%);
+    transform: translate(calc(100% - 30px), -50%);
 }
 
 .sidebar-edge-left.sidebar-show .sidebar-background,
@@ -281,7 +325,7 @@ input[type=number] {
 
 .sidebar-edge-up .sidebar-background {
     flex-direction: column-reverse;
-    transform: translate(-50%, calc(-100% + 40px));
+    transform: translate(-50%, calc(-100% + 30px));
 }
 
 .sidebar-overlay.sidebar-edge-down {
@@ -291,7 +335,7 @@ input[type=number] {
 
 .sidebar-edge-down .sidebar-background {
     flex-direction: column;
-    transform: translate(-50%, calc(100% - 40px));
+    transform: translate(-50%, calc(100% - 30px));
 }
 
 .sidebar-edge-down.sidebar-show .sidebar-background,
@@ -306,6 +350,7 @@ input[type=number] {
     display: flex;
     align-items: center;
     justify-content: center;
+    margin: 0;
 }
 
 .sidebar-button-image {
@@ -550,6 +595,10 @@ canvas.video-stream {
     flex-direction: column;
 }
 
+.sidebar-stream div {
+    padding: 5px;
+}
+
 .sidebar-stream-buttons {
     display: grid;
     grid-template-columns: 50% 50%;
@@ -565,4 +614,270 @@ canvas.video-stream {
 /* Prevent starting animation for elements */
 .prevent-start-transition {
     transition: none;
+}
+
+/** Settings Layout */
+.settings {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 20px;
+    padding: 20px;
+    align-items: stretch;
+}
+
+.settings-section {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    padding: 20px;
+    background-color: rgba(30, 30, 30, 0.5);
+    flex: 1 1 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.settings-section h2 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 1.3rem;
+    color: #64b5f6;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 10px;
+}
+
+/* Vertical layout for inputs in settings */
+.settings-section .input-div {
+    flex-direction: column;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+
+.settings-section .input-div label {
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: #e0e0e0;
+    font-size: 1rem;
+}
+
+/* Full width inputs */
+.settings-section .input-div input[type="text"],
+.settings-section .input-div input[type="number"] {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 10px;
+    background-color: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.settings-section .input-div .select-button-group {
+    width: 100%;
+    margin: 0;
+    gap: 10px;
+}
+
+.settings-section .input-div .select-button {
+    flex: 1;
+    text-align: center;
+}
+
+/* Checkboxes horizontal */
+.settings-section .input-div.input-type-checkbox {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    background-color: rgba(0, 0, 0, 0.2);
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.settings-section .input-div.input-type-checkbox label {
+    margin-bottom: 0;
+    margin-right: 10px;
+}
+
+.settings-section h3 {
+    margin-top: 10px;
+    font-size: 1.1rem;
+    color: white;
+}
+
+/* App Container for full layout */
+.app-container {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Prevent scrolling on the container itself */
+}
+
+/* Header Bar */
+.header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-color: rgba(63, 81, 181, 1.0); /* Blue color from existing buttons */
+    color: white;
+    padding: 10px 20px;
+    height: 60px; /* Fixed height for the bar */
+    flex-shrink: 0; /* Prevent it from shrinking */
+    position: sticky; /* Keep it at the top when scrolling, if content scrolls */
+    top: 0;
+    z-index: 100;
+}
+
+.header-left,
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.header-center {
+    flex-grow: 1; /* Allows center to take up available space */
+    text-align: center;
+}
+
+.header-title {
+    margin: 0; /* Remove default h1 margin */
+    font-size: 1.5rem;
+    font-weight: normal;
+    color: white;
+}
+
+/* Back Button styling */
+.back-button {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 2.5rem; /* Bigger arrow */
+    cursor: pointer;
+    padding: 0 15px; /* More padding */
+    margin: 0;
+}
+
+.back-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+/* App Content area */
+.app-content {
+    flex-grow: 1; /* Take all remaining vertical space */
+    overflow-y: auto; /* Allow content to scroll if it overflows */
+    padding-top: 20px; /* Add some space between header and content */
+    padding-left: 20px;
+    padding-right: 20px;
+}
+
+/* Adjustments for existing open-settings and host-add buttons */
+.header-left .host-add,
+.header-right .open-settings {
+    width: 50px; /* Bigger icon buttons */
+    height: 50px;
+    background-size: 80%; /* Adjust background image size */
+    margin: 0; /* Remove default button margin */
+    padding: 0;
+    border-radius: 50%; /* Make them round */
+    background-color: rgba(255, 255, 255, 0.1); /* Lighter background for action buttons */
+}
+.header-left .host-add:hover,
+.header-right .open-settings:hover {
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.2);
+}
+
+/* Override default h2/h3 margin for settings_menu if needed */
+.app-content h2,
+.app-content h3 {
+    margin-top: 12px;
+    margin-bottom: 8px;
+}
+
+/* Override .settings padding which is now handled by .app-content padding */
+.app-content .settings {
+    padding: 0;
+    margin: 0;
+}
+
+/* Modal Forms - applying similar styling to settings sections */
+.modal-content .input-div {
+    flex-direction: column;
+    align-items: flex-start;
+    margin-bottom: 15px; /* Increased gap */
+}
+
+.modal-content .input-div label {
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: #e0e0e0;
+    font-size: 1rem;
+}
+
+.modal-content .input-div input[type="text"],
+.modal-content .input-div input[type="number"] {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 10px;
+    background-color: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px; /* Consistent with other inputs */
+}
+
+.modal-content h2 { /* For modal headers */
+    color: #64b5f6; /* Consistent with settings section headers */
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 1.3rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 10px;
+}
+
+/* Modal Buttons */
+.modal-content button, .sidebar-stream-buttons button {
+    padding: 10px 20px;
+    margin: 5px;
+    border-radius: 4px; /* Consistent with other buttons */
+    color: white;
+}
+
+/* Style for the Cancel button specifically */
+.modal-content form button:last-child { /* Assuming cancel is always last */
+    background-color: rgb(80, 80, 80); /* Grey background */
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.modal-content form button:last-child:hover {
+    background-color: rgb(100, 100, 100);
+    box-shadow: none; /* Remove default hover shadow */
+}
+
+/* Modal specific input group for horizontal layout */
+.modal-content .add-host-input-group {
+    display: flex;
+    flex-direction: row;
+    gap: 15px; /* Space between the two inputs */
+    align-items: flex-end; /* Align inputs themselves at the bottom */
+    margin-bottom: 20px;
+}
+
+.modal-content .add-host-input-group .input-div {
+    flex-direction: column; /* Keep labels on top */
+    align-items: flex-start;
+    margin-bottom: 0; /* Reset previous margin if any */
+}
+
+/* Address input should take most of the space */
+.modal-content .add-host-input-group .input-div:first-child {
+    flex-grow: 1;
+}
+
+/* Port input field styling */
+.modal-content .add-host-input-group .input-type-text:last-child { /* Targeting the last input-div (port) */
+    width: 100px; /* Small width for 6 digits */
+    flex-shrink: 0; /* Prevent it from shrinking */
+}
+
+.modal-content .add-host-input-group .input-type-text:last-child input[type="text"],
+.modal-content .add-host-input-group .input-type-text:last-child input[type="number"] {
+    width: 100px; /* Specific width for the input element */
 }

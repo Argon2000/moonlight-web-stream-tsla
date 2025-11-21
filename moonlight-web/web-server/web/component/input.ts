@@ -40,6 +40,7 @@ export class InputComponent extends ElementWithLabel {
         super(internalName, displayName)
 
         this.div.classList.add("input-div")
+        this.div.classList.add(`input-type-${type}`)
 
         this.input.id = internalName
         this.input.type = type
@@ -117,13 +118,13 @@ export type SelectInit = {
 
 export class SelectComponent extends ElementWithLabel {
 
-    private strategy: "select" | "datalist"
+    private strategy: "buttons" | "datalist"
 
     private preSelectedOption: string = ""
     private options: Array<{ value: string, name: string }>
 
     private inputElement: null | HTMLInputElement
-    private optionRoot: HTMLSelectElement | HTMLDataListElement
+    private optionRoot: HTMLDivElement | HTMLDataListElement
 
     constructor(internalName: string, options: Array<{ value: string, name: string }>, init?: SelectInit) {
         super(internalName, init?.displayName)
@@ -150,37 +151,49 @@ export class SelectComponent extends ElementWithLabel {
 
             this.div.appendChild(this.inputElement)
             this.div.appendChild(this.optionRoot)
+
+            for (const option of options) {
+                const optionElement = document.createElement("option")
+                optionElement.value = option.name
+                this.optionRoot.appendChild(optionElement)
+            }
+
+            this.inputElement.addEventListener("change", () => {
+                this.div.dispatchEvent(new ComponentEvent("ml-change", this))
+            })
+
         } else {
-            this.strategy = "select"
+            this.strategy = "buttons"
 
             this.inputElement = null
 
-            this.optionRoot = document.createElement("select")
+            this.optionRoot = document.createElement("div")
             this.optionRoot.id = internalName
+            this.optionRoot.classList.add("select-button-group")
 
             this.div.appendChild(this.optionRoot)
-        }
 
-        for (const option of options) {
-            const optionElement = document.createElement("option")
+            for (const option of options) {
+                const button = document.createElement("button")
+                button.innerText = option.name
+                button.dataset.value = option.value
+                button.type = "button"
+                button.classList.add("select-button")
 
-            if (this.strategy == "datalist") {
-                optionElement.value = option.name
-            } else if (this.strategy == "select") {
-                optionElement.innerText = option.name
-                optionElement.value = option.value
+                if (this.preSelectedOption == option.value) {
+                    button.classList.add("selected")
+                }
+
+                button.addEventListener("click", () => {
+                    const buttons = (this.optionRoot as HTMLDivElement).querySelectorAll(".select-button")
+                    buttons.forEach(b => b.classList.remove("selected"))
+                    button.classList.add("selected")
+                    this.div.dispatchEvent(new ComponentEvent("ml-change", this))
+                })
+
+                this.optionRoot.appendChild(button)
             }
-
-            if (init && init.preSelectedOption == option.value) {
-                optionElement.selected = true
-            }
-
-            this.optionRoot.appendChild(optionElement)
         }
-
-        this.optionRoot.addEventListener("change", () => {
-            this.div.dispatchEvent(new ComponentEvent("ml-change", this))
-        })
     }
 
     reset() {
@@ -188,8 +201,8 @@ export class SelectComponent extends ElementWithLabel {
             const inputElement = (this.inputElement as HTMLInputElement)
             inputElement.value = ""
         } else {
-            const selectElement = (this.optionRoot as HTMLSelectElement)
-            selectElement.value = ""
+            const buttons = (this.optionRoot as HTMLDivElement).querySelectorAll(".select-button")
+            buttons.forEach(b => b.classList.remove("selected"))
         }
     }
 
@@ -198,17 +211,21 @@ export class SelectComponent extends ElementWithLabel {
             const name = (this.inputElement as HTMLInputElement).value
 
             return this.options.find(option => option.name == name)?.value ?? ""
-        } else if (this.strategy == "select") {
-            return (this.optionRoot as HTMLSelectElement).value
+        } else if (this.strategy == "buttons") {
+            const selected = (this.optionRoot as HTMLDivElement).querySelector(".select-button.selected") as HTMLButtonElement
+            return selected ? selected.dataset.value! : null
         }
 
         throw "Invalid strategy for select input field"
     }
 
     setOptionEnabled(value: string, enabled: boolean) {
-        for (const optionElement of this.optionRoot.options) {
-            if (optionElement.value == value) {
-                optionElement.disabled = !enabled
+        if (this.strategy == "buttons") {
+            const buttons = (this.optionRoot as HTMLDivElement).querySelectorAll(".select-button") as NodeListOf<HTMLButtonElement>
+            for (const button of buttons) {
+                if (button.dataset.value == value) {
+                    button.disabled = !enabled
+                }
             }
         }
     }

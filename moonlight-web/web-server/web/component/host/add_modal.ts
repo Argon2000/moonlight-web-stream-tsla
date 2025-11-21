@@ -37,7 +37,13 @@ export class AddHostModal extends FormModal<PutHostRequest> {
 
     mountForm(form: HTMLFormElement): void {
         form.appendChild(this.header)
-        this.address.mount(form)
-        this.httpPort.mount(form)
+        
+        const inputGroup = document.createElement("div")
+        inputGroup.classList.add("add-host-input-group")
+
+        this.address.mount(inputGroup)
+        this.httpPort.mount(inputGroup)
+
+        form.appendChild(inputGroup)
     }
 }

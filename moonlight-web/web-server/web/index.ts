@@ -43,11 +43,14 @@ function pushAppState(state: AppState) {
 
 class MainApp implements Component {
     private api: Api
-
-    private divElement = document.createElement("div")
+    private appContainer = document.createElement("div")
+    private headerBar = document.createElement("div")
+    private headerLeft = document.createElement("div")
+    private headerCenter = document.createElement("div")
+    private headerRight = document.createElement("div")
+    private appContent = document.createElement("div")
 
     private moonlightTextElement = document.createElement("h1")
-    private actionElement = document.createElement("div")
 
     private backToHostsButton: HTMLButtonElement = document.createElement("button")
 
@@ -63,35 +66,49 @@ class MainApp implements Component {
     constructor(api: Api) {
         this.api = api
 
-        // Moonlight text
+        // Setup overall app structure
+        this.appContainer.classList.add("app-container")
+        this.headerBar.classList.add("header-bar")
+        this.headerLeft.classList.add("header-left")
+        this.headerCenter.classList.add("header-center")
+        this.headerRight.classList.add("header-right")
+        this.appContent.classList.add("app-content")
+
+        this.appContainer.appendChild(this.headerBar)
+        this.appContainer.appendChild(this.appContent)
+
+        this.headerBar.appendChild(this.headerLeft)
+        this.headerBar.appendChild(this.headerCenter)
+        this.headerBar.appendChild(this.headerRight)
+
+        // Moonlight title / Dynamic Header
         this.moonlightTextElement.innerHTML = "Moonlight Web"
+        this.moonlightTextElement.classList.add("header-title")
+        this.headerCenter.appendChild(this.moonlightTextElement)
 
-        // Actions
-        this.actionElement.classList.add("actions-list")
-
-        // Back button
-        this.backToHostsButton.innerText = "Back"
+        // Back button (left side)
+        this.backToHostsButton.classList.add("back-button")
+        this.backToHostsButton.innerHTML = "&larr;" // Left arrow icon
+        this.backToHostsButton.style.display = "none"
         this.backToHostsButton.addEventListener("click", () => this.setCurrentDisplay("hosts"))
+        this.headerLeft.appendChild(this.backToHostsButton)
 
-        // Host add button
+        // Host add button (left side)
         this.hostAddButton.classList.add("host-add")
         this.hostAddButton.addEventListener("click", this.addHost.bind(this))
+        this.headerLeft.appendChild(this.hostAddButton)
 
-        // Host list
+        // Settings Button (right side)
+        this.settingsButton.classList.add("open-settings")
+        this.settingsButton.addEventListener("click", () => this.setCurrentDisplay("settings"))
+        this.headerRight.appendChild(this.settingsButton)
+
+        // Initialize core components, they will be mounted to appContent
         this.hostList = new HostList(api)
         this.hostList.addHostOpenListener(this.onHostOpen.bind(this))
 
-        // Settings Button
-        this.settingsButton.classList.add("open-settings")
-        this.settingsButton.addEventListener("click", () => this.setCurrentDisplay("settings"))
-
-        // Settings
         this.settings = new StreamSettingsComponent(getLocalStreamSettings() ?? undefined)
         this.settings.addChangeListener(this.onSettingsChange.bind(this))
-
-        // Append default elements
-        this.divElement.appendChild(this.moonlightTextElement)
-        this.divElement.appendChild(this.actionElement)
 
         this.setCurrentDisplay("hosts")
 
@@ -170,57 +187,44 @@ class MainApp implements Component {
             return
         }
 
-        // Check if we need to change
-        if (this.currentDisplay == display) {
-            if (this.currentDisplay == "games" && this.gameList?.getHostId() != hostId) {
-                // fall through
-            } else {
-                return
-            }
-        }
-
         // Unmount the current display
         if (this.currentDisplay == "hosts") {
-            this.actionElement.removeChild(this.hostAddButton)
-            this.actionElement.removeChild(this.settingsButton)
-
-            this.hostList.unmount(this.divElement)
+            this.hostList.unmount(this.appContent)
         } else if (this.currentDisplay == "games") {
-            this.actionElement.removeChild(this.backToHostsButton)
-
-            this.gameList?.unmount(this.divElement)
+            this.gameList?.unmount(this.appContent)
         } else if (this.currentDisplay == "settings") {
-            this.actionElement.removeChild(this.backToHostsButton)
-
-            this.settings.unmount(this.divElement)
+            this.settings.unmount(this.appContent)
         }
 
-        // Mount the new display
+        // Mount the new display and update header
         if (display == "hosts") {
-            this.actionElement.appendChild(this.hostAddButton)
-            this.actionElement.appendChild(this.settingsButton)
+            this.moonlightTextElement.innerText = "Moonlight Web"
+            this.backToHostsButton.style.display = "none"
+            this.hostAddButton.style.display = "block"
+            this.settingsButton.style.display = "block"
 
-            this.hostList.mount(this.divElement)
-
+            this.hostList.mount(this.appContent)
             pushAppState({ display: "hosts" })
         } else if (display == "games" && hostId != null) {
-            this.actionElement.appendChild(this.backToHostsButton)
+            this.moonlightTextElement.innerText = "Games"
+            this.backToHostsButton.style.display = "block"
+            this.hostAddButton.style.display = "none"
+            this.settingsButton.style.display = "none"
 
             if (this.gameList?.getHostId() != hostId) {
                 this.gameList = new GameList(this.api, hostId, hostCache ?? null)
                 this.gameList.addForceReloadListener(this.forceFetch.bind(this))
             }
-
-            this.gameList.mount(this.divElement)
-
+            this.gameList.mount(this.appContent)
             this.refreshGameListActiveGame()
-
             pushAppState({ display: "games", hostId: this.gameList?.getHostId() })
         } else if (display == "settings") {
-            this.actionElement.appendChild(this.backToHostsButton)
+            this.moonlightTextElement.innerText = "Settings"
+            this.backToHostsButton.style.display = "block"
+            this.hostAddButton.style.display = "none"
+            this.settingsButton.style.display = "none"
 
-            this.settings.mount(this.divElement)
-
+            this.settings.mount(this.appContent)
             pushAppState({ display: "settings" })
         }
 
@@ -263,9 +267,9 @@ class MainApp implements Component {
     }
 
     mount(parent: HTMLElement): void {
-        parent.appendChild(this.divElement)
+        parent.appendChild(this.appContainer)
     }
     unmount(parent: HTMLElement): void {
-        parent.removeChild(this.divElement)
+        parent.removeChild(this.appContainer)
     }
 }

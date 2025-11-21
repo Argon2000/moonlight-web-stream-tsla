@@ -76,10 +76,8 @@ export class StreamSettingsComponent implements Component {
 
     private divElement: HTMLDivElement = document.createElement("div")
 
-    private sidebarHeader: HTMLHeadingElement = document.createElement("h2")
     private sidebarEdge: SelectComponent
 
-    private streamHeader: HTMLHeadingElement = document.createElement("h2")
     private bitrate: InputComponent
     private packetSize: InputComponent
     private fps: InputComponent
@@ -92,18 +90,14 @@ export class StreamSettingsComponent implements Component {
 
     private videoSampleQueueSize: InputComponent
 
-    private audioHeader: HTMLHeadingElement = document.createElement("h2")
     private playAudioLocal: InputComponent
     private audioSampleQueueSize: InputComponent
 
-    private mouseHeader: HTMLHeadingElement = document.createElement("h2")
     private mouseScrollMode: SelectComponent
 
-    private controllerHeader: HTMLHeadingElement = document.createElement("h2")
     private controllerInvertAB: InputComponent
     private controllerInvertXY: InputComponent
 
-    private otherHeader: HTMLHeadingElement = document.createElement("h2")
     private toggleFullscreenWithKeybind: InputComponent
 
     constructor(settings?: StreamSettings) {
@@ -112,10 +106,20 @@ export class StreamSettingsComponent implements Component {
         // Root div
         this.divElement.classList.add("settings")
 
-        // Sidebar
-        this.sidebarHeader.innerText = "Sidebar"
-        this.divElement.appendChild(this.sidebarHeader)
+        const createSection = (title: string) => {
+            const section = document.createElement("div")
+            section.classList.add("settings-section")
+            const header = document.createElement("h2")
+            header.innerText = title
+            section.appendChild(header)
+            this.divElement.appendChild(section)
+            return section
+        }
 
+        // --- Basic Settings ---
+        const basicSection = createSection("Basic Settings")
+
+        // Sidebar
         this.sidebarEdge = new SelectComponent("sidebarEdge", [
             { value: "left", name: "Left" },
             { value: "right", name: "Right" },
@@ -126,38 +130,7 @@ export class StreamSettingsComponent implements Component {
             preSelectedOption: settings?.sidebarEdge ?? defaultSettings.sidebarEdge,
         })
         this.sidebarEdge.addChangeListener(this.onSettingsChange.bind(this))
-        this.sidebarEdge.mount(this.divElement)
-
-        // Video
-        this.streamHeader.innerText = "Video"
-        this.divElement.appendChild(this.streamHeader)
-
-        // Bitrate
-        this.bitrate = new InputComponent("bitrate", "number", "Bitrate", {
-            defaultValue: defaultSettings.bitrate.toString(),
-            value: settings?.bitrate?.toString(),
-            step: "100",
-        })
-        this.bitrate.addChangeListener(this.onSettingsChange.bind(this))
-        this.bitrate.mount(this.divElement)
-
-        // Packet Size
-        this.packetSize = new InputComponent("packetSize", "number", "Packet Size", {
-            defaultValue: defaultSettings.packetSize.toString(),
-            value: settings?.packetSize?.toString(),
-            step: "100"
-        })
-        this.packetSize.addChangeListener(this.onSettingsChange.bind(this))
-        this.packetSize.mount(this.divElement)
-
-        // Fps
-        this.fps = new InputComponent("fps", "number", "Fps", {
-            defaultValue: defaultSettings.fps.toString(),
-            value: settings?.fps?.toString(),
-            step: "100"
-        })
-        this.fps.addChangeListener(this.onSettingsChange.bind(this))
-        this.fps.mount(this.divElement)
+        this.sidebarEdge.mount(basicSection)
 
         // Video Size
         this.videoSize = new SelectComponent("videoSize",
@@ -175,55 +148,48 @@ export class StreamSettingsComponent implements Component {
             }
         )
         this.videoSize.addChangeListener(this.onSettingsChange.bind(this))
-        this.videoSize.mount(this.divElement)
+        this.videoSize.mount(basicSection)
 
         this.videoSizeWidth = new InputComponent("videoSizeWidth", "number", "Video Width", {
             defaultValue: defaultSettings.videoSizeCustom.width.toString(),
             value: settings?.videoSizeCustom.width.toString()
         })
         this.videoSizeWidth.addChangeListener(this.onSettingsChange.bind(this))
-        this.videoSizeWidth.mount(this.divElement)
+        this.videoSizeWidth.mount(basicSection)
 
         this.videoSizeHeight = new InputComponent("videoSizeHeight", "number", "Video Height", {
             defaultValue: defaultSettings.videoSizeCustom.height.toString(),
             value: settings?.videoSizeCustom.height.toString()
         })
         this.videoSizeHeight.addChangeListener(this.onSettingsChange.bind(this))
-        this.videoSizeHeight.mount(this.divElement)
+        this.videoSizeHeight.mount(basicSection)
 
-        // Video Sample Queue Size
-        this.videoSampleQueueSize = new InputComponent("videoSampleQueueSize", "number", "Video Sample Queue Size", {
-            defaultValue: defaultSettings.videoSampleQueueSize.toString(),
-            value: settings?.videoSampleQueueSize?.toString()
+        // Fps
+        this.fps = new InputComponent("fps", "number", "Fps", {
+            defaultValue: defaultSettings.fps.toString(),
+            value: settings?.fps?.toString(),
+            step: "100"
         })
-        this.videoSampleQueueSize.addChangeListener(this.onSettingsChange.bind(this))
-        this.videoSampleQueueSize.mount(this.divElement)
+        this.fps.addChangeListener(this.onSettingsChange.bind(this))
+        this.fps.mount(basicSection)
 
-        // Force H264
-        this.forceH264 = new InputComponent("dontForceH264", "checkbox", "Select Codec based on Support in Browser (Experimental)", {
-            defaultValue: defaultSettings.dontForceH264.toString(),
-            checked: settings?.dontForceH264
+        // Bitrate
+        this.bitrate = new InputComponent("bitrate", "number", "Bitrate", {
+            defaultValue: defaultSettings.bitrate.toString(),
+            value: settings?.bitrate?.toString(),
+            step: "100",
         })
-        this.forceH264.addChangeListener(this.onSettingsChange.bind(this))
-        this.forceH264.mount(this.divElement)
+        this.bitrate.addChangeListener(this.onSettingsChange.bind(this))
+        this.bitrate.mount(basicSection)
 
-        // Use Canvas Renderer
-        this.canvasRenderer = new InputComponent("canvasRenderer", "checkbox", "Use Canvas Renderer (Experimental)", {
-            defaultValue: defaultSettings.canvasRenderer.toString(),
-            checked: settings?.canvasRenderer ?? defaultSettings.canvasRenderer
-        })
-        this.canvasRenderer.addChangeListener(this.onSettingsChange.bind(this))
-        this.canvasRenderer.mount(this.divElement)
-
-        // Audio local
-        this.audioHeader.innerText = "Audio"
-        this.divElement.appendChild(this.audioHeader)
+        // --- Audio Settings ---
+        const audioSection = createSection("Audio Settings")
 
         this.playAudioLocal = new InputComponent("playAudioLocal", "checkbox", "Play Audio Local", {
             checked: settings?.playAudioLocal ?? defaultSettings.playAudioLocal
         })
         this.playAudioLocal.addChangeListener(this.onSettingsChange.bind(this))
-        this.playAudioLocal.mount(this.divElement)
+        this.playAudioLocal.mount(audioSection)
 
         // Audio Sample Queue Size
         this.audioSampleQueueSize = new InputComponent("audioSampleQueueSize", "number", "Audio Sample Queue Size", {
@@ -231,11 +197,11 @@ export class StreamSettingsComponent implements Component {
             value: settings?.audioSampleQueueSize?.toString()
         })
         this.audioSampleQueueSize.addChangeListener(this.onSettingsChange.bind(this))
-        this.audioSampleQueueSize.mount(this.divElement)
+        this.audioSampleQueueSize.mount(audioSection)
 
-        // Mouse
-        this.mouseHeader.innerText = "Mouse"
-        this.divElement.appendChild(this.mouseHeader)
+
+        // --- Input Settings ---
+        const inputSection = createSection("Input Settings")
 
         this.mouseScrollMode = new SelectComponent("mouseScrollMode",
             [
@@ -248,42 +214,76 @@ export class StreamSettingsComponent implements Component {
             }
         )
         this.mouseScrollMode.addChangeListener(this.onSettingsChange.bind(this))
-        this.mouseScrollMode.mount(this.divElement)
+        this.mouseScrollMode.mount(inputSection)
 
-        // Controller
+        // Controller Header info
+        const controllerHeader = document.createElement("h3")
         if (window.isSecureContext) {
-            this.controllerHeader.innerText = "Controller"
+            controllerHeader.innerText = "Controller"
         } else {
-            this.controllerHeader.innerText = "Controller (Disabled: Secure Context Required)"
+            controllerHeader.innerText = "Controller (Disabled: Secure Context Required)"
         }
-        this.divElement.appendChild(this.controllerHeader)
+        inputSection.appendChild(controllerHeader)
 
         this.controllerInvertAB = new InputComponent("controllerInvertAB", "checkbox", "Invert A and B", {
             checked: settings?.controllerConfig.invertAB ?? defaultSettings.controllerConfig.invertAB
         })
         this.controllerInvertAB.addChangeListener(this.onSettingsChange.bind(this))
-        this.controllerInvertAB.mount(this.divElement)
+        this.controllerInvertAB.mount(inputSection)
 
         this.controllerInvertXY = new InputComponent("controllerInvertXY", "checkbox", "Invert X and Y", {
             checked: settings?.controllerConfig.invertXY ?? defaultSettings.controllerConfig.invertXY
         })
         this.controllerInvertXY.addChangeListener(this.onSettingsChange.bind(this))
-        this.controllerInvertXY.mount(this.divElement)
+        this.controllerInvertXY.mount(inputSection)
 
         if (!window.isSecureContext) {
             this.controllerInvertAB.setEnabled(false)
             this.controllerInvertXY.setEnabled(false)
         }
 
-        // Other
-        this.otherHeader.innerText = "Other"
-        this.divElement.appendChild(this.otherHeader)
+
+        // --- Advanced Settings ---
+        const advancedSection = createSection("Advanced Settings")
+
+        // Packet Size
+        this.packetSize = new InputComponent("packetSize", "number", "Packet Size", {
+            defaultValue: defaultSettings.packetSize.toString(),
+            value: settings?.packetSize?.toString(),
+            step: "100"
+        })
+        this.packetSize.addChangeListener(this.onSettingsChange.bind(this))
+        this.packetSize.mount(advancedSection)
+
+        // Video Sample Queue Size
+        this.videoSampleQueueSize = new InputComponent("videoSampleQueueSize", "number", "Video Sample Queue Size", {
+            defaultValue: defaultSettings.videoSampleQueueSize.toString(),
+            value: settings?.videoSampleQueueSize?.toString()
+        })
+        this.videoSampleQueueSize.addChangeListener(this.onSettingsChange.bind(this))
+        this.videoSampleQueueSize.mount(advancedSection)
+
+        // Force H264
+        this.forceH264 = new InputComponent("dontForceH264", "checkbox", "Select Codec based on Support in Browser (Experimental)", {
+            defaultValue: defaultSettings.dontForceH264.toString(),
+            checked: settings?.dontForceH264
+        })
+        this.forceH264.addChangeListener(this.onSettingsChange.bind(this))
+        this.forceH264.mount(advancedSection)
+
+        // Use Canvas Renderer
+        this.canvasRenderer = new InputComponent("canvasRenderer", "checkbox", "Use Canvas Renderer (Experimental)", {
+            defaultValue: defaultSettings.canvasRenderer.toString(),
+            checked: settings?.canvasRenderer ?? defaultSettings.canvasRenderer
+        })
+        this.canvasRenderer.addChangeListener(this.onSettingsChange.bind(this))
+        this.canvasRenderer.mount(advancedSection)
 
         this.toggleFullscreenWithKeybind = new InputComponent("toggleFullscreenWithKeybind", "checkbox", "Toggle Fullscreen and Mouse Lock with Ctrl + Shift + I", {
             checked: settings?.toggleFullscreenWithKeybind
         })
         this.toggleFullscreenWithKeybind.addChangeListener(this.onSettingsChange.bind(this))
-        this.toggleFullscreenWithKeybind.mount(this.divElement)
+        this.toggleFullscreenWithKeybind.mount(advancedSection)
 
         this.onSettingsChange()
     }
