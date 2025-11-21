@@ -27,19 +27,19 @@ export type StreamSettings = {
 export function defaultStreamSettings(): StreamSettings {
     return {
         sidebarEdge: "left",
-        bitrate: 10000,
-        packetSize: 256,
+        bitrate: 4000,
+        packetSize: 512,
         fps: 60,
-        videoSampleQueueSize: 6,
+        videoSampleQueueSize: 3,
         videoSize: "custom", // Cannot change dropdownlist in Tesla browser
         videoSizeCustom: {
-            width: 1920,
-            height: 1080,
+            width: 1280,
+            height: 720,
         },
-        dontForceH264: false,
-        canvasRenderer: false,
+        dontForceH264: true,
+        canvasRenderer: true,
         playAudioLocal: false,
-        audioSampleQueueSize: 20,
+        audioSampleQueueSize: 6,
         mouseScrollMode: "highres",
         controllerConfig: {
             invertAB: false,
@@ -210,7 +210,7 @@ export class StreamSettingsComponent implements Component {
         // Use Canvas Renderer
         this.canvasRenderer = new InputComponent("canvasRenderer", "checkbox", "Use Canvas Renderer (Experimental)", {
             defaultValue: defaultSettings.canvasRenderer.toString(),
-            checked: settings === null || settings === void 0 ? void 0 : settings.canvasRenderer
+            checked: settings?.canvasRenderer ?? defaultSettings.canvasRenderer
         })
         this.canvasRenderer.addChangeListener(this.onSettingsChange.bind(this))
         this.canvasRenderer.mount(this.divElement)
@@ -220,7 +220,7 @@ export class StreamSettingsComponent implements Component {
         this.divElement.appendChild(this.audioHeader)
 
         this.playAudioLocal = new InputComponent("playAudioLocal", "checkbox", "Play Audio Local", {
-            checked: settings?.playAudioLocal
+            checked: settings?.playAudioLocal ?? defaultSettings.playAudioLocal
         })
         this.playAudioLocal.addChangeListener(this.onSettingsChange.bind(this))
         this.playAudioLocal.mount(this.divElement)
@@ -259,13 +259,13 @@ export class StreamSettingsComponent implements Component {
         this.divElement.appendChild(this.controllerHeader)
 
         this.controllerInvertAB = new InputComponent("controllerInvertAB", "checkbox", "Invert A and B", {
-            checked: settings?.controllerConfig.invertAB
+            checked: settings?.controllerConfig.invertAB ?? defaultSettings.controllerConfig.invertAB
         })
         this.controllerInvertAB.addChangeListener(this.onSettingsChange.bind(this))
         this.controllerInvertAB.mount(this.divElement)
 
         this.controllerInvertXY = new InputComponent("controllerInvertXY", "checkbox", "Invert X and Y", {
-            checked: settings?.controllerConfig.invertXY
+            checked: settings?.controllerConfig.invertXY ?? defaultSettings.controllerConfig.invertXY
         })
         this.controllerInvertXY.addChangeListener(this.onSettingsChange.bind(this))
         this.controllerInvertXY.mount(this.divElement)
