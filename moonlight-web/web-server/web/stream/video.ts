@@ -7,10 +7,10 @@ export type VideoCodecSupport = {
     H265_MAIN10: boolean
     H265_REXT8_444: boolean
     H265_REXT10_444: boolean
-    AV1_MAIN8: boolean
+    /*AV1_MAIN8: boolean
     AV1_MAIN10: boolean
     AV1_HIGH8_444: boolean
-    AV1_HIGH10_444: boolean
+    AV1_HIGH10_444: boolean*/
 } & Record<string, boolean>
 
 const CAPABILITIES_CODECS: Array<{ key: string, mimeType: string, fmtpLine: Array<string> }> = [
@@ -24,10 +24,10 @@ const CAPABILITIES_CODECS: Array<{ key: string, mimeType: string, fmtpLine: Arra
     { key: "H265_REXT8_444", mimeType: "video/H265", fmtpLine: ["profile-id=4", "tier-flag=0", "tx-mode=SRST"] },
     { key: "H265_REXT10_444", mimeType: "video/H265", fmtpLine: ["profile-id=5", "tier-flag=0", "tx-mode=SRST"] },
     // Av1
-    { key: "AV1_MAIN8", mimeType: "video/AV1", fmtpLine: [] }, // <-- Safari AV1 fmtpLine is empty
+    /*{ key: "AV1_MAIN8", mimeType: "video/AV1", fmtpLine: [] }, // <-- Safari AV1 fmtpLine is empty
     { key: "AV1_MAIN10", mimeType: "video/AV1", fmtpLine: [] }, // <-- Safari AV1 fmtpLine is empty
     { key: "AV1_HIGH8", mimeType: "video/AV1", fmtpLine: ["profile=1"] },
-    { key: "AV1_HIGH10", mimeType: "video/AV1", fmtpLine: ["profile=1"] },
+    { key: "AV1_HIGH10", mimeType: "video/AV1", fmtpLine: ["profile=1"] },*/
 ]
 
 const VIDEO_DECODER_CODECS: Array<{ key: string } & VideoDecoderConfig> = [
@@ -52,10 +52,10 @@ export function getStandardVideoFormats() {
         H265_MAIN10: false,
         H265_REXT8_444: false,
         H265_REXT10_444: false,
-        AV1_MAIN8: false,
+        /*AV1_MAIN8: false,
         AV1_MAIN10: false,
         AV1_HIGH8_444: false,
-        AV1_HIGH10_444: false
+        AV1_HIGH10_444: false*/
     }
 }
 
@@ -132,7 +132,7 @@ export function createSupportedVideoFormatsBits(support: VideoCodecSupport): num
     if (support.H265_REXT10_444) {
         mask |= StreamSupportedVideoFormats.H265_REXT10_444
     }
-    if (support.AV1_MAIN8) {
+    /*if (support.AV1_MAIN8) {
         mask |= StreamSupportedVideoFormats.AV1_MAIN8
     }
     if (support.AV1_MAIN10) {
@@ -143,7 +143,7 @@ export function createSupportedVideoFormatsBits(support: VideoCodecSupport): num
     }
     if (support.AV1_HIGH10_444) {
         mask |= StreamSupportedVideoFormats.AV1_HIGH10_444
-    }
+    }*/
 
     return mask
 }
