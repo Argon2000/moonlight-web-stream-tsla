@@ -3,6 +3,11 @@ import { App, ConnectionStatus, RtcIceCandidate, StreamCapabilities, StreamClien
 import { StreamSettings } from "../component/settings_menu.js"
 import { defaultStreamInputConfig, StreamInput } from "./input.js"
 import { createSupportedVideoFormatsBits, VideoCodecSupport } from "./video.js"
+// @ts-ignore
+import Module from "./opus-stream-decoder.mjs"
+
+const decoderModule = Module();
+const OpusStreamDecoder = decoderModule.OpusStreamDecoder;
 
 export type InfoEvent = CustomEvent<
     { type: "app", app: App } |
@@ -58,6 +63,11 @@ export class Stream {
     private input: StreamInput
 
     private streamerSize: [number, number]
+
+    private audioContext: AudioContext | null = null
+    private audioDecoder: typeof OpusStreamDecoder | null = null
+    private nextAudioTime: number = 0
+    private sourceNodes: AudioBufferSourceNode[] = []
 
     constructor(api: Api, hostId: number, appId: number, settings: StreamSettings, supportedVideoFormats: VideoCodecSupport, viewerScreenSize: [number, number]) {
         this.api = api
@@ -123,6 +133,94 @@ export class Stream {
 
             this.debugLog("}")
         })
+
+        this.setupDecoder()
+        if(!this.settings?.canvasRenderer) {
+            this.setupAudioContext()
+        }
+    }
+
+    private async setupDecoder() {
+        try {
+            this.audioDecoder = new OpusStreamDecoder({
+                onDecode: (decoded: any) => {
+                    this.playPcm(decoded.left, decoded.right);
+                }
+            });
+
+            await this.audioDecoder.ready;
+            this.debugLog("Opus decoder ready");
+        } catch (e) {
+            console.error("Failed to setup opus decoder", e);
+            this.debugLog(`Failed to setup opus decoder: ${e}`);
+        }
+    }
+
+    private setupAudioContext() {
+        try {
+            // @ts-ignore
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            this.audioContext = new AudioContext();
+            this.monitorAudioContext();
+        } catch (e) {
+            console.error("Failed to create AudioContext", e);
+        }
+    }
+    
+    private monitorAudioContext() {
+        if (this.audioContext) {
+             this.audioContext.onstatechange = () => {
+                 const state = this.audioContext?.state;
+                 console.log(`[AudioContext] state change: ${state}`);
+                 this.debugLog(`AudioContext state: ${state}`);
+             };
+        }
+    }
+
+    private playPcm(left: Float32Array, right: Float32Array) {
+        if (!this.audioContext) return;
+
+        const currentTime = this.audioContext.currentTime;
+        let ahead = this.nextAudioTime - currentTime;
+
+        // Latency Control (reset if too far behind or ahead)
+        const MAX_LATENCY = 0.20; // 200ms
+        if (ahead > MAX_LATENCY) {
+            // We are too far ahead (high latency), clear buffer to catch up
+            this.sourceNodes.forEach(node => {
+                try { node.stop(); } catch(e) {}
+            });
+            this.sourceNodes = [];
+            
+            this.nextAudioTime = currentTime + 0.05;
+            ahead = 0;
+        }
+
+        if (ahead < 0) {
+             this.nextAudioTime = currentTime + 0.05;
+        }
+
+        const channels = 2;
+        const frameCount = left.length;
+        const audioBuffer = this.audioContext.createBuffer(channels, frameCount, 48000);
+
+        audioBuffer.copyToChannel(left, 0);
+        audioBuffer.copyToChannel(right, 1);
+
+        const source = this.audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.audioContext.destination);
+        
+        source.start(this.nextAudioTime);
+        this.nextAudioTime += audioBuffer.duration;
+        
+        this.sourceNodes.push(source);
+        source.onended = () => {
+            const index = this.sourceNodes.indexOf(source);
+            if (index > -1) {
+                this.sourceNodes.splice(index, 1);
+            }
+        };
     }
 
     private debugLog(message: string) {
@@ -389,15 +487,6 @@ export class Stream {
                     }
                 })
                 this.eventTarget.dispatchEvent(customEvent)
-            } else if (track.kind === "audio") {
-                this.mediaStream.addTrack(track)
-                const customEvent = new CustomEvent("stream-info", {
-                    detail: {
-                        type: "audioTrackAdded",
-                        track: track
-                    }
-                })
-                this.eventTarget.dispatchEvent(customEvent)
             } else {
                 this.mediaStream.addTrack(track)
             }
@@ -434,6 +523,21 @@ export class Stream {
 
         if (event.channel.label == "general") {
             event.channel.addEventListener("message", this.onGeneralDataChannelMessage.bind(this))
+        } else if (event.channel.label == "audio") {
+            event.channel.binaryType = "arraybuffer";
+            event.channel.addEventListener("message", this.onAudioDataChannelMessage.bind(this))
+        }
+    }
+
+    private async onAudioDataChannelMessage(event: MessageEvent) {
+        if (!this.audioDecoder) return;
+        
+        try {
+            const data = new Uint8Array(event.data);
+            await this.audioDecoder.ready;
+            this.audioDecoder.decode(data);
+        } catch (e) {
+            console.error("Error decoding audio", e);
         }
     }
     private async onGeneralDataChannelMessage(event: MessageEvent) {
@@ -504,6 +608,16 @@ export class Stream {
 
     getStreamerSize(): [number, number] {
         return this.streamerSize
+    }
+
+    resumeAudio() {
+        if (!this.audioContext) {
+            this.setupAudioContext()
+        }
+
+        if (this.audioContext && this.audioContext.state === "suspended") {
+            this.audioContext.resume();
+        }
     }
 }
 

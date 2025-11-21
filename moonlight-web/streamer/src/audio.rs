@@ -1,19 +1,19 @@
-use std::{sync::Arc, time::Duration};
+use std::io::Write;
+use std::sync::Arc;
 
 use bytes::Bytes;
-use log::{error, info, warn};
+use log::{info, warn};
 use moonlight_common::stream::{
     audio::AudioDecoder,
     bindings::{AudioConfig, OpusMultistreamConfig},
 };
+use ogg::{PacketWriteEndInfo, PacketWriter};
+use tokio::sync::mpsc::{self, Sender, UnboundedSender};
 use webrtc::{
     api::media_engine::{MIME_TYPE_OPUS, MediaEngine},
-    media::Sample,
+    data_channel::RTCDataChannel,
     rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType},
-    track::track_local::track_local_static_sample::TrackLocalStaticSample,
 };
-
-use crate::{StreamConnection, sender::TrackLocalSender};
 
 pub fn register_audio_codecs(media_engine: &mut MediaEngine) -> Result<(), webrtc::Error> {
     media_engine.register_codec(
@@ -35,16 +35,31 @@ pub fn register_audio_codecs(media_engine: &mut MediaEngine) -> Result<(), webrt
 }
 
 pub struct OpusTrackSampleAudioDecoder {
-    decoder: TrackLocalSender<TrackLocalStaticSample>,
+    channel: Arc<RTCDataChannel>,
+    sender: Option<Sender<Bytes>>,
     config: Option<OpusMultistreamConfig>,
 }
 
 impl OpusTrackSampleAudioDecoder {
-    pub fn new(stream: Arc<StreamConnection>, channel_queue_size: usize) -> Self {
+    pub fn new(channel: Arc<RTCDataChannel>) -> Self {
         Self {
-            decoder: TrackLocalSender::new(stream, channel_queue_size),
+            channel,
+            sender: None,
             config: None,
         }
+    }
+}
+
+struct VecSender(UnboundedSender<Vec<u8>>);
+impl Write for VecSender {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .send(buf.to_vec())
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -71,22 +86,82 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
             );
         }
 
-        if let Err(err) = self.decoder.blocking_create_track(
-            TrackLocalStaticSample::new(
-                RTCRtpCodecCapability {
-                    mime_type: MIME_TYPE_OPUS.to_string(),
-                    ..Default::default()
-                },
-                "audio".to_string(),
-                "moonlight".to_string(),
-            ),
-            |_| {},
-        ) {
-            error!("Failed to create opus track: {err:?}");
-            return -1;
-        };
-
+        let samples_per_frame = stream_config.samples_per_frame as u64;
         self.config = Some(stream_config);
+
+        let (sender, mut receiver) = mpsc::channel::<Bytes>(50);
+        self.sender = Some(sender);
+
+        let channel = self.channel.clone();
+
+        tokio::spawn(async move {
+            let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel();
+            let mut writer = PacketWriter::new(VecSender(chunk_tx));
+            let serial = 12345;
+            let mut granule_pos = 0;
+
+            // Write ID Header
+            let mut id_header = Vec::new();
+            id_header.extend_from_slice(b"OpusHead");
+            id_header.push(1); // Version
+            id_header.push(2); // Channels
+            id_header.extend_from_slice(&0u16.to_le_bytes()); // Pre-skip
+            id_header.extend_from_slice(&48000u32.to_le_bytes()); // Sample rate
+            id_header.extend_from_slice(&0u16.to_le_bytes()); // Gain
+            id_header.push(0); // Mapping family
+
+            if let Err(e) = writer.write_packet(
+                id_header,
+                serial,
+                PacketWriteEndInfo::EndPage,
+                granule_pos,
+            ) {
+                warn!("Failed to write ID header: {:?}", e);
+            }
+
+            // Write Comment Header
+            let mut comment_header = Vec::new();
+            comment_header.extend_from_slice(b"OpusTags");
+            let vendor = "Moonlight";
+            comment_header.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+            comment_header.extend_from_slice(vendor.as_bytes());
+            comment_header.extend_from_slice(&0u32.to_le_bytes()); // User comment list length
+
+            if let Err(e) = writer.write_packet(
+                comment_header,
+                serial,
+                PacketWriteEndInfo::EndPage,
+                granule_pos,
+            ) {
+                warn!("Failed to write comment header: {:?}", e);
+            }
+
+            // Send headers
+            while let Ok(chunk) = chunk_rx.try_recv() {
+                if let Err(e) = channel.send(&Bytes::from(chunk)).await {
+                    warn!("Failed to send Ogg headers: {:?}", e);
+                }
+            }
+
+            while let Some(data) = receiver.recv().await {
+                granule_pos += samples_per_frame;
+
+                if let Err(e) = writer.write_packet(
+                    data.to_vec(),
+                    serial,
+                    PacketWriteEndInfo::EndPage,
+                    granule_pos,
+                ) {
+                    warn!("Failed to write audio packet: {:?}", e);
+                }
+
+                while let Ok(chunk) = chunk_rx.try_recv() {
+                    if let Err(e) = channel.send(&Bytes::from(chunk)).await {
+                        warn!("Failed to send audio data: {:?}", e);
+                    }
+                }
+            }
+        });
 
         0
     }
@@ -96,23 +171,10 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
     fn stop(&mut self) {}
 
     fn decode_and_play_sample(&mut self, data: &[u8]) {
-        let Some(config) = self.config.as_ref() else {
-            return;
-        };
-
-        let duration =
-            Duration::from_secs_f64(config.samples_per_frame as f64 / config.sample_rate as f64);
-
-        let data = Bytes::copy_from_slice(data);
-
-        let sample = Sample {
-            data,
-            duration,
-            // Time should be set if you want fine-grained sync
-            ..Default::default()
-        };
-
-        self.decoder.blocking_send_sample(sample);
+        if let Some(sender) = &self.sender {
+            let data = Bytes::copy_from_slice(data);
+            let _ = sender.blocking_send(data);
+        }
     }
 
     fn config(&self) -> AudioConfig {

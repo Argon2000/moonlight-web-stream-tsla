@@ -200,9 +200,6 @@ class ViewerApp implements Component {
         } else if (data.type == "videoTrack") {
             if (this.canvasRenderer) {
                 this.canvasRenderer.setVideoTrack(data.track)
-                if(this.stream) {
-                    this.videoElement.srcObject = this.stream.getMediaStream()
-                }
             }
         }
     }
@@ -214,6 +211,8 @@ class ViewerApp implements Component {
 
     onUserInteraction() {
         this.focusInput()
+
+        this.stream?.resumeAudio();
 
         if (this.videoElement) {
             this.videoElement.muted = false

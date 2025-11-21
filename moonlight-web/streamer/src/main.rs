@@ -45,6 +45,7 @@ use webrtc::{
         peer_connection_state::RTCPeerConnectionState,
         sdp::{sdp_type::RTCSdpType, session_description::RTCSessionDescription},
     },
+    data_channel::data_channel_init::RTCDataChannelInit,
 };
 
 use common::api_bindings::{
@@ -289,6 +290,7 @@ struct StreamConnection {
     pub peer: Arc<RTCPeerConnection>,
     pub ipc_sender: IpcSender<StreamerIpcMessage>,
     pub general_channel: Arc<RTCDataChannel>,
+    pub audio_channel: Arc<RTCDataChannel>,
     // Input
     pub input: StreamInput,
     // Video
@@ -328,6 +330,16 @@ impl StreamConnection {
         let input = StreamInput::new();
 
         let general_channel = peer.create_data_channel("general", None).await?;
+        let audio_channel = peer
+            .create_data_channel(
+                "audio",
+                Some(RTCDataChannelInit {
+                    ordered: Some(true),
+                    max_packet_life_time: Some(100),
+                    ..Default::default()
+                }),
+            )
+            .await?;
 
         let this = Arc::new(Self {
             runtime: Handle::current(),
@@ -337,6 +349,7 @@ impl StreamConnection {
             peer: peer.clone(),
             ipc_sender,
             general_channel,
+            audio_channel,
             video_size: Mutex::new((0, 0)),
             input,
             stream: Default::default(),
@@ -639,8 +652,7 @@ impl StreamConnection {
         );
 
         let audio_decoder = OpusTrackSampleAudioDecoder::new(
-            self.clone(),
-            self.settings.audio_sample_queue_size as usize,
+            self.audio_channel.clone(),
         );
 
         let connection_listener = StreamConnectionListener::new(self.clone());
