@@ -27,8 +27,8 @@ export type StreamSettings = {
 export function defaultStreamSettings(): StreamSettings {
     return {
         sidebarEdge: "left",
-        bitrate: 4000,
-        packetSize: 512,
+        bitrate: 2000,
+        packetSize: 256,
         fps: 60,
         videoSampleQueueSize: 3,
         videoSize: "custom", // Cannot change dropdownlist in Tesla browser
