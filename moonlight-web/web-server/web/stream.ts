@@ -654,6 +654,7 @@ class ConnectionInfoModal implements Modal<void> {
     private text = document.createElement("p")
 
     private debugDetailButton = document.createElement("button")
+    private debugDetailRetryButton = document.createElement("button")
     private debugDetail = "" // We store this seperate because line breaks don't work when the element is not mounted on the dom
     private debugDetailDisplay = document.createElement("div")
 
@@ -666,6 +667,11 @@ class ConnectionInfoModal implements Modal<void> {
         this.debugDetailButton.innerText = "Show Logs"
         this.debugDetailButton.addEventListener("click", this.onDebugDetailClick.bind(this))
         this.root.appendChild(this.debugDetailButton)
+
+        this.debugDetailRetryButton.innerText = "Retry"
+        this.debugDetailRetryButton.style.display = "none"
+        this.debugDetailRetryButton.addEventListener("click", this.onDebugDetailRetryClick.bind(this))
+        this.root.appendChild(this.debugDetailRetryButton)
 
         this.debugDetailDisplay.classList.add("textlike")
         this.debugDetailDisplay.classList.add("modal-video-connect-debug")
@@ -682,6 +688,10 @@ class ConnectionInfoModal implements Modal<void> {
             this.root.appendChild(this.debugDetailDisplay)
             this.debugDetailDisplay.innerText = this.debugDetail
         }
+    }
+
+    private onDebugDetailRetryClick() {
+        window.location.reload()
     }
 
     private debugLog(line: string) {
@@ -719,13 +729,13 @@ class ConnectionInfoModal implements Modal<void> {
             const text = `Server: Connection Terminated with code ${data.errorCode}`
             this.text.innerText = text
             this.debugLog(text)
-
+            this.debugDetailRetryButton.style.display = "inline-block"
             showModal(this)
         } else if (data.type == "error") {
             const text = `Server: Error: ${data.message}`
             this.text.innerText = text
             this.debugLog(text)
-
+            this.debugDetailRetryButton.style.display = "inline-block"
             showModal(this)
         }
     }
