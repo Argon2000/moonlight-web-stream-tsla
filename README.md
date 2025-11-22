@@ -15,6 +15,7 @@ It hosts Web Server which will forward [Sunshine](https://docs.lizardbyte.dev/pr
   - [Configuring https](#configuring-https)
   - [Proxying via Apache 2](#proxying-via-apache-2)
 - [Config](#config)
+- [Contributors](#contributors)
 - [Building](#building)
 
 ## Images
@@ -324,6 +325,9 @@ Will always append the prefix to all requests made by the website.
     "web_path_prefix": "/moonlight"
 }
 ```
+
+## Contributors
+- Thanks to [@Argon2000](https://github.com/Argon2000) for implementing a canvas renderer, which makes this run in the Tesla browser.
 
 ## Building
 Make sure you've cloned this repo with all it's submodules
