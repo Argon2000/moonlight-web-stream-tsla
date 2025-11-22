@@ -64,8 +64,8 @@ input[type="checkbox"] {
     /* remove native box */
     appearance: none;
     vertical-align: middle;
-    width: 24px;
-    height: 24px;
+    min-width: 24px;
+    min-height: 24px;
     border: 2px solid #555;
     border-radius: 6px;
     cursor: pointer;
@@ -234,7 +234,7 @@ input[type=number] {
 .context-menu-background {
     display: block;
     position: fixed;
-    z-index: 1;
+    z-index: 2;
     border-radius: 5px;
     background-color: rgb(86, 92, 100);
     /** animation */
@@ -769,7 +769,7 @@ canvas.video-stream {
 .header-right .open-settings {
     width: 50px; /* Bigger icon buttons */
     height: 50px;
-    background-size: 80%; /* Adjust background image size */
+    background-size: 70%; /* Adjust background image size */
     margin: 0; /* Remove default button margin */
     padding: 0;
     border-radius: 50%; /* Make them round */
