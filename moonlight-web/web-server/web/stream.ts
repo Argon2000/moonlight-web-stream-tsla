@@ -85,6 +85,8 @@ class ViewerApp implements Component {
     private previousMouseMode: MouseMode
     private toggleFullscreenWithKeybind: boolean
     private hasShownFullscreenEscapeWarning = false
+    
+    private wakeLock: WakeLockSentinel | null = null
 
     constructor(api: Api, hostId: number, appId: number) {
         this.api = api
@@ -218,6 +220,24 @@ class ViewerApp implements Component {
         this.onGamepadUpdate()
 
         this.stream.getInput().addScreenKeyboardVisibleEvent(this.onScreenKeyboardSetVisible.bind(this))
+        
+        this.requestWakeLock();
+    }
+    
+    private async requestWakeLock() {
+        if ('wakeLock' in navigator) {
+            try {
+                this.wakeLock = await navigator.wakeLock.request('screen');
+                this.wakeLock.addEventListener('release', () => {
+                    console.log('Wake Lock was released');
+                    // Re-acquire wake lock if it was released (e.g. tab switch)
+                    // unless we are navigating away (not handled here but implicit)
+                });
+                console.log('Wake Lock is active');
+            } catch (err) {
+                console.error(`Wake Lock failed: ${err}`);
+            }
+        }
     }
 
     private async onInfo(event: InfoEvent) {

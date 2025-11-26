@@ -27,11 +27,11 @@ export type StreamSettings = {
 export function defaultStreamSettings(): StreamSettings {
     return {
         sidebarEdge: "left",
-        bitrate: 2000,
-        packetSize: 256,
+        bitrate: 3000,
+        packetSize: 1024,
         fps: 60,
-        videoSampleQueueSize: 3,
-        videoSize: "custom", // Cannot change dropdownlist in Tesla browser
+        videoSampleQueueSize: 6,
+        videoSize: "720p",
         videoSizeCustom: {
             width: 1280,
             height: 720,
@@ -39,8 +39,8 @@ export function defaultStreamSettings(): StreamSettings {
         dontForceH264: true,
         canvasRenderer: true,
         playAudioLocal: false,
-        audioSampleQueueSize: 6,
-        mouseScrollMode: "highres",
+        audioSampleQueueSize: 20,
+        mouseScrollMode: "normal",
         controllerConfig: {
             invertAB: false,
             invertXY: false
