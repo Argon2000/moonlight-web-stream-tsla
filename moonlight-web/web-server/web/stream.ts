@@ -90,6 +90,10 @@ class ViewerApp implements Component {
     constructor(api: Api, hostId: number, appId: number) {
         this.api = api
 
+        // Bind update loops
+        this.onTouchUpdate = this.onTouchUpdate.bind(this)
+        this.onGamepadUpdate = this.onGamepadUpdate.bind(this)
+
         // Configure sidebar
         this.sidebar = new ViewerSidebar(this)
         setSidebar(this.sidebar)
@@ -210,9 +214,11 @@ class ViewerApp implements Component {
             this.videoElement.srcObject = this.stream.getMediaStream()
         }
 
-        // Start animation frame loop
-        this.onTouchUpdate()
-        this.onGamepadUpdate()
+        // Poll inputs 25 times a second
+        setInterval(() => {
+            this.onTouchUpdate()
+            this.onGamepadUpdate()
+        }, 40)
 
         this.stream.getInput().addScreenKeyboardVisibleEvent(this.onScreenKeyboardSetVisible.bind(this))
         
@@ -400,8 +406,6 @@ class ViewerApp implements Component {
     }
     onTouchUpdate() {
         this.stream?.getInput().onTouchUpdate(this.getStreamRect())
-
-        window.requestAnimationFrame(this.onTouchUpdate.bind(this))
     }
     onTouchMove(event: TouchEvent) {
         event.preventDefault()
@@ -422,8 +426,6 @@ class ViewerApp implements Component {
     }
     onGamepadUpdate() {
         this.stream?.getInput().onGamepadUpdate()
-
-        window.requestAnimationFrame(this.onGamepadUpdate.bind(this))
     }
 
     // Fullscreen
