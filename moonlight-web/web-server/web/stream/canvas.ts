@@ -88,46 +88,49 @@ export class CanvasRenderer {
         }
     }
 
+    private offsetX = 0;
+    private offsetY = 0;
+    private drawWidth = 0;
+    private drawHeight = 0;
+
+    public onFirstFrameAfterResize(frame: VideoFrame) {
+        if(!this.canvas) return
+        // Calculate aspect ratios
+        const canvasAspect = this.canvas.clientWidth / this.canvas.clientHeight
+        const frameAspect = frame.displayWidth / frame.displayHeight
+
+        this.canvas.width = frame.displayWidth
+        this.canvas.height = frame.displayHeight
+
+        if (canvasAspect > frameAspect) {
+            // Canvas is wider than the video frame, so the video will be pillarboxed.
+            this.drawHeight = this.canvas.height
+            this.drawWidth = this.drawHeight * frameAspect
+            this.offsetX = (this.canvas.width - this.drawWidth) / 2
+        } else {
+            // Canvas is taller than the video frame, so the video will be letterboxed.
+            this.drawWidth = this.canvas.width
+            this.drawHeight = this.drawWidth / frameAspect
+            this.offsetY = (this.canvas.height - this.drawHeight) / 2
+        }
+    }
+
     onFrame() {
         if (!this.ctx || !this.pendingFrame || !this.canvas) {
             this.readAndDrawFrame() // Try to read next frame if current is null
             return
         }
 
+        if(this.drawWidth === 0) {
+            this.onFirstFrameAfterResize(this.pendingFrame)
+        }
+
         const frame = this.pendingFrame
         this.pendingFrame = null // Clear pending frame
 
-        // Calculate aspect ratios
-        const canvasAspect = this.canvas.clientWidth / this.canvas.clientHeight
-        const frameAspect = frame.displayWidth / frame.displayHeight
-
-        let drawWidth
-        let drawHeight
-        let offsetX = 0
-        let offsetY = 0
-
-        // Adjust canvas rendering resolution to match the video frame's intrinsic resolution
-        // This ensures that the image data drawn onto the canvas has the correct pixel density
-        // and avoids blurriness that can occur if the canvas's internal resolution
-        // is different from the source video frame's resolution.
-        this.canvas.width = frame.displayWidth
-        this.canvas.height = frame.displayHeight
-
-        if (canvasAspect > frameAspect) {
-            // Canvas is wider than the video frame, so the video will be pillarboxed.
-            drawHeight = this.canvas.height
-            drawWidth = drawHeight * frameAspect
-            offsetX = (this.canvas.width - drawWidth) / 2
-        } else {
-            // Canvas is taller than the video frame, so the video will be letterboxed.
-            drawWidth = this.canvas.width
-            drawHeight = drawWidth / frameAspect
-            offsetY = (this.canvas.height - drawHeight) / 2
-        }
-
         // Clear the canvas before drawing the new frame to prevent artifacts
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
-        this.ctx.drawImage(frame, offsetX, offsetY, drawWidth, drawHeight)
+        this.ctx.drawImage(frame, this.offsetX, this.offsetY, this.drawWidth, this.drawHeight)
         frame.close() // Close the VideoFrame to release resources
 
         this.readAndDrawFrame() // Read the next frame
