@@ -65,9 +65,10 @@ export class Stream {
     private streamerSize: [number, number]
 
     private audioContext: AudioContext | null = null
+    private mainGainNode: GainNode | null = null
     private audioDecoder: typeof OpusStreamDecoder | null = null
     private nextAudioTime: number = 0
-    private sourceNodes: AudioBufferSourceNode[] = []
+    private sourceNodes: Set<AudioBufferSourceNode> = new Set()
     private isFirstAudioPacket: boolean = true
 
     constructor(api: Api, hostId: number, appId: number, settings: StreamSettings, supportedVideoFormats: VideoCodecSupport, viewerScreenSize: [number, number]) {
@@ -162,6 +163,11 @@ export class Stream {
             // @ts-ignore
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             this.audioContext = new AudioContext();
+            
+            this.mainGainNode = this.audioContext.createGain();
+            this.mainGainNode.gain.value = 4.0;
+            this.mainGainNode.connect(this.audioContext.destination);
+
             this.monitorAudioContext();
         } catch (e) {
             console.error("Failed to create AudioContext", e);
@@ -194,10 +200,10 @@ export class Stream {
         const MAX_LATENCY = 0.20; // 200ms
         if (ahead > MAX_LATENCY) {
             // We are too far ahead (high latency), clear buffer to catch up
-            this.sourceNodes.forEach(node => {
+            for (const node of this.sourceNodes) {
                 try { node.stop(); } catch(e) {}
-            });
-            this.sourceNodes = [];
+            }
+            this.sourceNodes.clear();
             
             // Catch up but keep a tiny buffer to avoid immediate underrun
             // For Tesla (cellular), we increase this slightly to prevent robotic artifacts
@@ -222,22 +228,18 @@ export class Stream {
         const source = this.audioContext.createBufferSource();
         source.buffer = audioBuffer;
 
-        // Increase volume
-        const gainNode = this.audioContext.createGain();
-        gainNode.gain.value = 4.0;
-
-        source.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
+        if (this.mainGainNode) {
+            source.connect(this.mainGainNode);
+        } else {
+            source.connect(this.audioContext.destination);
+        }
         
         source.start(this.nextAudioTime);
         this.nextAudioTime += audioBuffer.duration// / playbackRate;
         
-        this.sourceNodes.push(source);
+        this.sourceNodes.add(source);
         source.onended = () => {
-            const index = this.sourceNodes.indexOf(source);
-            if (index > -1) {
-                this.sourceNodes.splice(index, 1);
-            }
+            this.sourceNodes.delete(source);
         };
     }
 
@@ -470,7 +472,7 @@ export class Stream {
     private onTrack(event: RTCTrackEvent) {
         // Optimize jitter buffer for Tesla (cellular)
         // 0ms is ideal for LAN, but ~20-30ms helps smooth out cellular jitter without killing feel
-        const targetDelay = 20;
+        const targetDelay = 0;
         
         event.receiver.jitterBufferTarget = targetDelay;
 
@@ -555,7 +557,8 @@ export class Stream {
         if (!this.audioDecoder) return;
         
         try {
-            const data = new Uint8Array(event.data);
+            const arrayBuffer = event.data;
+            const data = new Uint8Array(arrayBuffer, 0, arrayBuffer.byteLength);
             await this.audioDecoder.ready;
             this.audioDecoder.decode(data);
         } catch (e) {
