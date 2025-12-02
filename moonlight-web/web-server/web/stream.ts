@@ -70,7 +70,6 @@ class ViewerApp implements Component {
 
     private div = document.createElement("div")
     private videoElement = document.createElement("video")
-    private keepAliveAudio = document.createElement("audio")
     private keepAliveContext: AudioContext | null = null
     private canvasElement = document.createElement("canvas")
 
@@ -119,34 +118,30 @@ class ViewerApp implements Component {
         this.videoElement.muted = true
 
         // Configure keep alive audio
-        this.keepAliveAudio.src = "/white-noise.wav"
-        this.keepAliveAudio.loop = true
-        this.keepAliveAudio.volume = 1.0 
-        
         try {
-            // Use AudioContext to lower volume without muting effectively
-            // This is needed because setting volume on the element directly might cause the browser to optimize it away
-            this.keepAliveContext = new AudioContext()
-            const source = this.keepAliveContext.createMediaElementSource(this.keepAliveAudio)
-            const gainNode = this.keepAliveContext.createGain()
+            // @ts-ignore
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            this.keepAliveContext = new AudioContext();
             
-            // Set very low gain - just enough to be processed but not heard
-            gainNode.gain.value = 0.3
+            // Create an oscillator (sine wave)
+            const oscillator = this.keepAliveContext.createOscillator();
+            oscillator.type = 'sine';
+            oscillator.frequency.value = 440; // Hz
+
+            // Create a gain node to make it inaudible but active
+            const gainNode = this.keepAliveContext.createGain();
+            // extremely low volume, effectively silent but active
+            gainNode.gain.value = 0.0001; 
+
+            oscillator.connect(gainNode);
+            gainNode.connect(this.keepAliveContext.destination);
             
-            source.connect(gainNode)
-            gainNode.connect(this.keepAliveContext.destination)
+            oscillator.start();
+            
+            console.log("Keep alive oscillator started");
         } catch (e) {
             console.error("Failed to set up keep alive audio context", e)
-            // Fallback to just low volume if AudioContext fails
-            this.keepAliveAudio.volume = 0.001
         }
-
-        this.keepAliveAudio.play().then(() => {
-            console.log("Keep alive audio resumed")
-        }).catch((error) => { 
-            console.error("Failed to resume keep alive audio", error)
-        })
-        this.div.appendChild(this.keepAliveAudio)
 
         // Configure canvas element
         if(this.settings.canvasRenderer) {
@@ -268,14 +263,6 @@ class ViewerApp implements Component {
 
         if (this.keepAliveContext?.state === 'suspended') {
             this.keepAliveContext.resume()
-        }
-
-        if (this.keepAliveAudio.paused) {
-            this.keepAliveAudio.play().then(() => {
-                console.log("Keep alive audio resumed")
-             }).catch((error) => { 
-                console.error("Failed to resume keep alive audio", error)
-            })
         }
 
         if (this.videoElement) {
