@@ -79,6 +79,7 @@ export class StreamInput {
     private controllerInputs: Array<RTCDataChannel | null> = []
 
     private touchSupported: boolean | null = null
+    private previousStates: { [internalId: number]: GamepadState } = {}
 
     constructor(config?: StreamInputConfig, peer?: RTCPeerConnection,) {
         if (peer) {
@@ -111,7 +112,7 @@ export class StreamInput {
             ordered: false
         })
         this.mouseAbsolute = peer.createDataChannel("mouseAbsolute", {
-            ordered: true,
+            ordered: false,
             maxRetransmits: 0
         })
         this.mouseRelative = peer.createDataChannel("mouseRelative", {
@@ -594,7 +595,7 @@ export class StreamInput {
         return actuators
     }
 
-    private gamepads: Array<number | null> = []
+    private gamepads: Map<number, number> = new Map() // Maps gamepad.index to our internal ID
     private gamepadRumbleInterval: number | null = null
 
     onGamepadConnect(gamepad: Gamepad) {
@@ -603,30 +604,33 @@ export class StreamInput {
             return
         }
 
-        if (this.gamepads.indexOf(gamepad.index) != -1) {
+        if (this.gamepads.has(gamepad.index)) {
             return
         }
 
-        let id = -1
-        for (let i = 0; i < this.gamepads.length; i++) {
-            if (this.gamepads[i] == null) {
-                this.gamepads[i] = gamepad.index
-                id = i
-                break
+        // Find the lowest available internal ID
+        let id = 0
+        while (true) {
+            let inUse = false
+            for (const existingId of this.gamepads.values()) {
+                if (existingId === id) {
+                    inUse = true
+                    break
+                }
             }
+            if (!inUse) break
+            id++
         }
-        if (id == -1) {
-            id = this.gamepads.length
-            this.gamepads.push(gamepad.index)
-        }
+        
+        this.gamepads.set(gamepad.index, id)
 
         // Start Rumble interval
         if (this.gamepadRumbleInterval == null) {
             this.gamepadRumbleInterval = window.setInterval(this.onGamepadRumbleInterval.bind(this), CONTROLLER_RUMBLE_INTERVAL_MS - 10)
         }
 
-        // Reset rumble
-        this.gamepadRumbleCurrent[0] = { lowFrequencyMotor: 0, highFrequencyMotor: 0, leftTrigger: 0, rightTrigger: 0 }
+        // Initialize rumble state for the new controller using its assigned internal ID
+        this.gamepadRumbleCurrent[id] = { lowFrequencyMotor: 0, highFrequencyMotor: 0, leftTrigger: 0, rightTrigger: 0 }
 
         let capabilities = 0
 
@@ -652,42 +656,79 @@ export class StreamInput {
             }
         }
 
-        this.sendControllerAdd(this.gamepads.length - 1, SUPPORTED_BUTTONS, capabilities)
+        this.sendControllerAdd(id, SUPPORTED_BUTTONS, capabilities)
 
         if (gamepad.mapping != "standard") {
             console.warn(`[Gamepad]: Unable to read values of gamepad with mapping ${gamepad.mapping}`)
         }
     }
     onGamepadDisconnect(event: GamepadEvent) {
-        const index = this.gamepads.indexOf(event.gamepad.index)
-        if (index != -1) {
-            const id = this.gamepads[index]
-            if (id != null) {
-                this.sendControllerRemove(id)
-            }
+        const internalId = this.gamepads.get(event.gamepad.index)
+        if (internalId != undefined) {
+            this.sendControllerRemove(internalId)
+            this.gamepads.delete(event.gamepad.index)
 
-            this.gamepads[index] = null
+            // Close and clear the channel to ensure we create a new one on reconnect
+            // in case the host closed it or it's in a bad state.
+            if (this.controllerInputs[internalId]) {
+                this.controllerInputs[internalId]?.close()
+                this.controllerInputs[internalId] = null
+            }
         }
     }
     onGamepadUpdate() {
-        for (let gamepadId = 0; gamepadId < this.gamepads.length; gamepadId++) {
-            const gamepadIndex = this.gamepads[gamepadId]
-            if (gamepadIndex == null) {
-                return
-            }
-            const gamepad = navigator.getGamepads()[gamepadIndex]
-            if (!gamepad) {
-                continue
-            }
+        const gamepads = navigator.getGamepads()
+        for (const [gamepadIndex, internalId] of this.gamepads.entries()) {
+            try {
+                const gamepad = gamepads[gamepadIndex]
+                if (!gamepad) {
+                    continue
+                }
 
-            if (gamepad.mapping != "standard") {
-                continue
+                if (gamepad.mapping != "standard") {
+                    continue
+                }
+
+                const state = extractGamepadState(gamepad, this.config.controllerConfig)
+
+                if (!this.previousStates[internalId] || !this.areGamepadStatesEqual(this.previousStates[internalId], state)) {
+                    this.sendController(internalId, state)
+                    this.previousStates[internalId] = state
+                }
+            } catch (e) {
+                console.error("[Input]: Error processing gamepad update", e)
             }
-
-            const state = extractGamepadState(gamepad, this.config.controllerConfig)
-
-            this.sendController(gamepadId, state)
         }
+    }
+
+    private readonly EPSILON = 0.001 // Tolerans. Ändringar mindre än 0.1% ignoreras.
+
+    private areGamepadStatesEqual(state1: GamepadState, state2: GamepadState): boolean {
+        if (state1.buttonFlags !== state2.buttonFlags) {
+            return false;
+        }
+
+        const compareFloats = (f1: number, f2: number): boolean => {
+            return Math.abs(f1 - f2) < this.EPSILON;
+        };
+
+        if (!compareFloats(state1.leftTrigger, state2.leftTrigger)) return false;
+        if (!compareFloats(state1.rightTrigger, state2.rightTrigger)) return false;
+        if (!compareFloats(state1.leftStickX, state2.leftStickX)) return false;
+        if (!compareFloats(state1.leftStickY, state2.leftStickY)) return false;
+        if (!compareFloats(state1.rightStickX, state2.rightStickX)) return false;
+        if (!compareFloats(state1.rightStickY, state2.rightStickY)) return false;
+
+        return true;
+    }
+
+    private getGamepadIndex(internalId: number): number | undefined {
+        for (const [gamepadIndex, currentInternalId] of this.gamepads.entries()) {
+            if (currentInternalId === internalId) {
+                return gamepadIndex
+            }
+        }
+        return undefined
     }
 
     private onControllerMessage(event: MessageEvent) {
@@ -706,24 +747,24 @@ export class StreamInput {
             const lowFrequencyMotor = this.buffer.getU16() / U16_MAX
             const highFrequencyMotor = this.buffer.getU16() / U16_MAX
 
-            const gamepadIndex = this.gamepads[id]
-            if (gamepadIndex == null) {
+            const gamepadIndex = this.getGamepadIndex(id)
+            if (gamepadIndex == undefined) {
                 return
             }
 
-            this.setGamepadEffect(gamepadIndex, "dual-rumble", { lowFrequencyMotor, highFrequencyMotor })
+            this.setGamepadEffect(id, "dual-rumble", { lowFrequencyMotor, highFrequencyMotor })
         } else if (ty == 1) {
             // Trigger Rumble
             const id = this.buffer.getU8()
             const leftTrigger = this.buffer.getU16() / U16_MAX
             const rightTrigger = this.buffer.getU16() / U16_MAX
 
-            const gamepadIndex = this.gamepads[id]
-            if (gamepadIndex == null) {
+            const gamepadIndex = this.getGamepadIndex(id)
+            if (gamepadIndex == undefined) {
                 return
             }
 
-            this.setGamepadEffect(gamepadIndex, "trigger-rumble", { leftTrigger, rightTrigger })
+            this.setGamepadEffect(id, "trigger-rumble", { leftTrigger, rightTrigger })
         }
     }
 
@@ -743,13 +784,8 @@ export class StreamInput {
     }
 
     private onGamepadRumbleInterval() {
-        for (let id = 0; id < this.gamepads.length; id++) {
-            const gamepadIndex = this.gamepads[id]
-            if (gamepadIndex == null) {
-                continue
-            }
-
-            const rumble = this.gamepadRumbleCurrent[gamepadIndex]
+        for (const [gamepadIndex, internalId] of this.gamepads.entries()) {
+            const rumble = this.gamepadRumbleCurrent[internalId]
             const gamepad = navigator.getGamepads()[gamepadIndex]
             if (gamepad && rumble) {
                 this.refreshGamepadRumble(rumble, gamepad)
@@ -777,13 +813,13 @@ export class StreamInput {
                             duration: CONTROLLER_RUMBLE_INTERVAL_MS,
                             weakMagnitude: rumble.lowFrequencyMotor,
                             strongMagnitude: rumble.highFrequencyMotor
-                        })
+                        }).catch(() => {})
                     } else if (effect == "trigger-rumble") {
                         actuator.playEffect("trigger-rumble", {
                             duration: CONTROLLER_RUMBLE_INTERVAL_MS,
                             leftTrigger: rumble.leftTrigger,
                             rightTrigger: rumble.rightTrigger
-                        })
+                        }).catch(() => {})
                     }
                 }
             } else if ("type" in actuator && (actuator.type == "vibration" || actuator.type == "dual-rumble")) {
@@ -791,25 +827,28 @@ export class StreamInput {
                     duration: CONTROLLER_RUMBLE_INTERVAL_MS,
                     weakMagnitude: rumble.lowFrequencyMotor,
                     strongMagnitude: rumble.highFrequencyMotor
-                })
+                }).catch(() => {})
             } else if ("playEffect" in actuator && typeof actuator.playEffect == "function") {
                 actuator.playEffect("dual-rumble", {
                     duration: CONTROLLER_RUMBLE_INTERVAL_MS,
                     weakMagnitude: rumble.lowFrequencyMotor,
                     strongMagnitude: rumble.highFrequencyMotor
-                })
+                }).catch(() => {})
                 actuator.playEffect("trigger-rumble", {
                     duration: CONTROLLER_RUMBLE_INTERVAL_MS,
                     leftTrigger: rumble.leftTrigger,
                     rightTrigger: rumble.rightTrigger
-                })
+                }).catch(() => {})
             } else if ("pulse" in actuator && typeof actuator.pulse == "function") {
                 const weak = Math.min(Math.max(rumble.lowFrequencyMotor, 0), 1);
                 const strong = Math.min(Math.max(rumble.highFrequencyMotor, 0), 1);
 
                 const average = (weak + strong) / 2.0
 
-                actuator.pulse(average, CONTROLLER_RUMBLE_INTERVAL_MS)
+                const promise = actuator.pulse(average, CONTROLLER_RUMBLE_INTERVAL_MS)
+                if (promise && typeof promise.catch == "function") {
+                    promise.catch(() => {})
+                }
             }
         }
     }
@@ -855,7 +894,7 @@ export class StreamInput {
         if (!this.controllerInputs[id]) {
             this.controllerInputs[id] = this.peer?.createDataChannel(`controller${id}`, {
                 maxRetransmits: 0,
-                ordered: true,
+                ordered: false,
             }) ?? null
         }
     }
