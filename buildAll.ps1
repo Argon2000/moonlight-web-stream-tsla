@@ -11,13 +11,13 @@ $moonlightRoot = Resolve-Path "."
 $moonlightFrontend = Join-Path -Path $moonlightRoot -ChildPath "/moonlight-web/web-server"
 
 if(!$moonlightRoot -or !$moonlightFrontend) {
-    echo "No root directory found!"
+    Write-Output "No root directory found!"
     exit 0
 }
 
-echo "Target directory at $targetDir"
-echo "Putting final output into $outputDir"
-echo "Moonlight Root Directory $moonlightRoot"
+Write-Output "Target directory at $targetDir"
+Write-Output "Putting final output into $outputDir"
+Write-Output "Moonlight Root Directory $moonlightRoot"
 
 $targets = @(
     "x86_64-pc-windows-gnu"
@@ -28,7 +28,7 @@ $targets = @(
 
 Remove-Item -Path "$outputDir/*" -Recurse -Force
 
-echo "------------- Starting Build for Frontend -------------"
+Write-Output "------------- Starting Build for Frontend -------------"
 Set-Location $moonlightFrontend
 
 New-Item -ItemType Directory "$outputDir/static" -Force | Out-Null
@@ -37,24 +37,24 @@ Remove-Item -Path "$moonlightFrontend/dist" -Recurse -Force
 npm run build
 
 Copy-Item -Path "$moonlightFrontend/dist/*" -Destination "$outputDir/static" -Recurse -Force
-echo "------------- Finished Build for Frontend -------------"
+Write-Output "------------- Finished Build for Frontend -------------"
 
 Set-Location $moonlightRoot
 
 foreach($target in $targets) {
-    echo "------------- Starting Build for $target -------------"
+    Write-Output "------------- Starting Build for $target -------------"
     $messages = cross build --release --target $target --message-format=json | ForEach-Object { $_ | ConvertFrom-Json }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
-    echo "------------- Finished Build for $target -------------"
+    Write-Output "------------- Finished Build for $target -------------"
 
     $artifact = $messages | Where-Object { $_.reason -eq "compiler-artifact" -and $_.executable }
     $binaryPaths = $artifact | ForEach-Object { Join-Path -Path $targetDir -ChildPath ($_.executable.Substring("/target".length)) }
 
     $binaryPaths | ForEach-Object { Write-Host "Binary: $_" }
 
-    echo "------------- Starting Zipping for $target -------------"
+    Write-Output "------------- Starting Zipping for $target -------------"
     $itemsToZip = @($binaryPaths) + "$outputDir/static"
     $archiveName = "$outputDir/moonlight-web-$target"
 
@@ -80,10 +80,10 @@ foreach($target in $targets) {
         Remove-Item $archiveName -Recurse
     }
 
-    echo "Created Zip file at $archiveName"
-    echo "------------- Finished Zipping for $target -------------"
+    Write-Output "Created Zip file at $archiveName"
+    Write-Output "------------- Finished Zipping for $target -------------"
 }
 
 Remove-Item "$outputDir/static" -Recurse
 
-echo "Finished!"
+Write-Output "Finished!"
