@@ -42,12 +42,15 @@ export function showErrorPopup(message: string, fatal: boolean = false, errorObj
 function handleError(event: ErrorEvent) {
     const fatal = event instanceof FetchError
 
-    showErrorPopup(`${event.error}`, fatal, event)
+    const message = event.error ? `${event.error}` : (event.message || "Unknown Error")
+    const location = `${event.filename}:${event.lineno}:${event.colno}`
+    showErrorPopup(`${message} at ${location}`, fatal, event)
 }
 function handleRejection(event: PromiseRejectionEvent) {
     const fatal = event instanceof FetchError
 
-    showErrorPopup(`${event.reason}`, fatal, event)
+    const message = event.reason ? `${event.reason}` : "Unknown Promise Rejection"
+    showErrorPopup(message, fatal, event)
 }
 
 window.addEventListener("error", handleError)
