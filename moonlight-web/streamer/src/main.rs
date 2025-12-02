@@ -334,8 +334,9 @@ impl StreamConnection {
             .create_data_channel(
                 "audio",
                 Some(RTCDataChannelInit {
-                    ordered: Some(true),
-                    max_packet_life_time: Some(100),
+                    ordered: Some(false),
+                    max_packet_life_time: None,
+                    max_retransmits: Some(0),
                     ..Default::default()
                 }),
             )
