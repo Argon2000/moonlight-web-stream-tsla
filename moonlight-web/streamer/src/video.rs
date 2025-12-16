@@ -1,6 +1,4 @@
 use std::{
-    io::Cursor,
-    ops::Range,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -8,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use log::{debug, error, info, warn};
 use moonlight_common::stream::{
     bindings::{DecodeResult, SupportedVideoFormats, VideoDecodeUnit, VideoFormat},
@@ -72,15 +70,15 @@ pub fn register_video_codecs(
 
 enum VideoCodec {
     H264 {
-        nal_reader: H264Reader<Cursor<Vec<u8>>>,
+        nal_reader: H264Reader,
         payloader: H264Payloader,
     },
     H265 {
-        nal_reader: H265Reader<Cursor<Vec<u8>>>,
+        nal_reader: H265Reader,
         payloader: H265Payloader,
     },
     Av1 {
-        annex_b: AnnexBSplitter<Cursor<Vec<u8>>>,
+        annex_b: AnnexBSplitter,
         payloader: Av1Payloader,
     },
 }
@@ -91,7 +89,7 @@ pub struct TrackSampleVideoDecoder {
     supported_formats: SupportedVideoFormats,
     // Video important
     video_codec: Option<VideoCodec>,
-    samples: Vec<BytesMut>,
+    samples: Vec<Bytes>,
     needs_idr: Arc<AtomicBool>,
     old_presentation_time: Duration,
 }
@@ -114,7 +112,7 @@ impl TrackSampleVideoDecoder {
     }
 
     fn send_single_frame(
-        samples: &mut Vec<BytesMut>,
+        samples: &mut Vec<Bytes>,
         sender: &mut TrackLocalSender<SequencedTrackLocalStaticRTP>,
         payloader: &mut impl Payloader,
         timestamp: u32,
@@ -126,7 +124,7 @@ impl TrackSampleVideoDecoder {
                 RTP_OUTBOUND_MTU,
                 0, // is set in the write fn
                 timestamp,
-                &sample.freeze(),
+                &sample,
                 peekable.peek().is_none(),
             ) {
                 Ok(value) => value,
@@ -205,7 +203,7 @@ impl VideoDecoder for TrackSampleVideoDecoder {
             // -- H264
             VideoFormat::H264 | VideoFormat::H264High8_444 => {
                 self.video_codec = Some(VideoCodec::H264 {
-                    nal_reader: H264Reader::new(Cursor::new(Vec::new()), 0),
+                    nal_reader: H264Reader::new(Bytes::new()),
                     payloader: Default::default(),
                 });
             }
@@ -215,7 +213,7 @@ impl VideoDecoder for TrackSampleVideoDecoder {
             | VideoFormat::H265Rext8_444
             | VideoFormat::H265Rext10_444 => {
                 self.video_codec = Some(VideoCodec::H265 {
-                    nal_reader: H265Reader::new(Cursor::new(Vec::new()), 0),
+                    nal_reader: H265Reader::new(Bytes::new()),
                     payloader: Default::default(),
                 });
             }
@@ -225,7 +223,7 @@ impl VideoDecoder for TrackSampleVideoDecoder {
             | VideoFormat::Av1High8_444
             | VideoFormat::Av1High10_444 => {
                 self.video_codec = Some(VideoCodec::Av1 {
-                    annex_b: AnnexBSplitter::new(Cursor::new(Vec::new()), 0),
+                    annex_b: AnnexBSplitter::new(Bytes::new()),
                     payloader: Default::default(),
                 });
             }
@@ -239,10 +237,12 @@ impl VideoDecoder for TrackSampleVideoDecoder {
     fn submit_decode_unit(&mut self, unit: VideoDecodeUnit<'_>) -> DecodeResult {
         let timestamp = (unit.presentation_time.as_secs_f64() * self.clock_rate as f64) as u32;
 
-        let mut full_frame = Vec::new();
+        let total_len = unit.buffers.iter().map(|b| b.data.len()).sum();
+        let mut full_frame = Vec::with_capacity(total_len);
         for buffer in unit.buffers {
             full_frame.extend_from_slice(buffer.data);
         }
+        let full_frame_bytes = Bytes::from(full_frame);
 
         match &mut self.video_codec {
             // -- H264
@@ -250,14 +250,10 @@ impl VideoDecoder for TrackSampleVideoDecoder {
                 nal_reader,
                 payloader,
             }) => {
-                nal_reader.reset(Cursor::new(full_frame));
+                nal_reader.reset(full_frame_bytes);
 
-                while let Ok(Some(nal)) = nal_reader.next_nal() {
-                    let data = trim_bytes_to_range(
-                        nal.full,
-                        nal.header_range.start..nal.payload_range.end,
-                    );
-
+                while let Some(nal) = nal_reader.next_nal() {
+                    let data = nal.full.slice(nal.header_range.start..nal.payload_range.end);
                     self.samples.push(data);
                 }
 
@@ -268,14 +264,10 @@ impl VideoDecoder for TrackSampleVideoDecoder {
                 nal_reader,
                 payloader,
             }) => {
-                nal_reader.reset(Cursor::new(full_frame));
+                nal_reader.reset(full_frame_bytes);
 
-                while let Ok(Some(nal)) = nal_reader.next_nal() {
-                    let data = trim_bytes_to_range(
-                        nal.full,
-                        nal.header_range.start..nal.payload_range.end,
-                    );
-
+                while let Some(nal) = nal_reader.next_nal() {
+                    let data = nal.full.slice(nal.header_range.start..nal.payload_range.end);
                     self.samples.push(data);
                 }
 
@@ -283,12 +275,10 @@ impl VideoDecoder for TrackSampleVideoDecoder {
             }
             // -- AV1
             Some(VideoCodec::Av1 { annex_b, payloader }) => {
-                annex_b.reset(Cursor::new(full_frame));
+                annex_b.reset(full_frame_bytes);
 
-                while let Ok(Some(annex_b_payload)) = annex_b.next() {
-                    let data =
-                        trim_bytes_to_range(annex_b_payload.full, annex_b_payload.payload_range);
-
+                while let Some(annex_b_payload) = annex_b.next() {
+                    let data = annex_b_payload.full.slice(annex_b_payload.payload_range);
                     self.samples.push(data);
                 }
 
@@ -471,16 +461,4 @@ fn video_format_to_codec(format: VideoFormat) -> Option<RTCRtpCodecParameters> {
             ..Default::default()
         }),
     }
-}
-
-fn trim_bytes_to_range(mut buf: BytesMut, range: Range<usize>) -> BytesMut {
-    if range.start > 0 {
-        let _ = buf.split_to(range.start);
-    }
-
-    if range.end - range.start < buf.len() {
-        let _ = buf.split_off(range.end - range.start);
-    }
-
-    buf
 }

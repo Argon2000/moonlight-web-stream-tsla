@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use bytes::BytesMut;
+use bytes::Bytes;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
@@ -19,7 +19,7 @@ pub struct Nal {
     pub header_range: Range<usize>,
     pub start_code: AnnexBStartCode,
     pub start_code_range: Range<usize>,
-    pub full: BytesMut,
+    pub full: Bytes,
 }
 
 #[repr(u8)]
