@@ -441,7 +441,6 @@ impl StreamConnection {
         if matches!(
             state,
             RTCPeerConnectionState::Failed
-                | RTCPeerConnectionState::Disconnected
                 | RTCPeerConnectionState::Closed
         ) {
             self.stop().await;
