@@ -86,6 +86,9 @@ class ViewerApp implements Component {
     private hasShownFullscreenEscapeWarning = false
     
     private wakeLock: WakeLockSentinel | null = null
+    private hasInteracted = false
+    private cachedStreamRect: DOMRect | null = null
+    private pollIntervalId: ReturnType<typeof setInterval> | null = null
 
     constructor(api: Api, hostId: number, appId: number) {
         this.api = api
@@ -164,6 +167,9 @@ class ViewerApp implements Component {
         document.addEventListener("pointerlockchange", this.onPointerLockChange.bind(this))
         document.addEventListener("fullscreenchange", this.onFullscreenChange.bind(this))
 
+        // Invalidate cached stream rect on resize
+        window.addEventListener("resize", () => { this.cachedStreamRect = null })
+
         window.addEventListener("gamepadconnected", this.onGamepadConnect.bind(this))
         window.addEventListener("gamepaddisconnected", this.onGamepadDisconnect.bind(this))
         // Connect all gamepads
@@ -215,7 +221,7 @@ class ViewerApp implements Component {
         }
 
         // Poll inputs 25 times a second
-        setInterval(() => {
+        this.pollIntervalId = setInterval(() => {
             this.onTouchUpdate()
             this.onGamepadUpdate()
         }, 40)
@@ -263,6 +269,9 @@ class ViewerApp implements Component {
     }
 
     onUserInteraction() {
+        if (this.hasInteracted) return
+        this.hasInteracted = true
+
         this.focusInput()
 
         this.stream?.resumeAudio();
@@ -491,6 +500,7 @@ class ViewerApp implements Component {
         return "fullscreenElement" in document && !!document.fullscreenElement
     }
     private async onFullscreenChange() {
+        this.cachedStreamRect = null
         this.checkFullyImmersed()
     }
 
@@ -577,6 +587,8 @@ class ViewerApp implements Component {
     }
 
     getStreamRect(): DOMRect {
+        if (this.cachedStreamRect) return this.cachedStreamRect
+
         // The bounding rect of the videoElement or canvasElement can be bigger than the actual video
         // -> We need to correct for this when sending positions, else positions are wrong
 
@@ -609,12 +621,13 @@ class ViewerApp implements Component {
                 y += boundingRectHalfHeight - videoHalfHeight
             }
 
-            return new DOMRect(
+            this.cachedStreamRect = new DOMRect(
                 x,
                 y,
                 videoSize[0] * videoMultiplier,
                 videoSize[1] * videoMultiplier
             )
+            return this.cachedStreamRect
         }
         else {
             const clientRect = this.canvasElement.getBoundingClientRect()
@@ -631,7 +644,8 @@ class ViewerApp implements Component {
 
             if (this.settings?.stretchToFit) {
                 // If stretched, the input rect is simply the canvas's client rect
-                return clientRect
+                this.cachedStreamRect = clientRect
+                return this.cachedStreamRect
             } else if (boundingRectAspect > videoAspect) {
                 // Canvas is wider than video aspect, video will be pillarboxed
                 videoMultiplier = canvasCssHeight / videoSize[1]
@@ -646,7 +660,8 @@ class ViewerApp implements Component {
                 y += (canvasCssHeight - videoRenderedHeight) / 2 // Center vertically
                 height = videoRenderedHeight
             }
-            return new DOMRect(x, y, width, height)
+            this.cachedStreamRect = new DOMRect(x, y, width, height)
+            return this.cachedStreamRect
         }
     }
     getElement(): HTMLElement {

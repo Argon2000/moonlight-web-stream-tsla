@@ -1,6 +1,6 @@
 use std::{
+    cell::UnsafeCell,
     os::raw::{c_char, c_int, c_uchar, c_ushort},
-    sync::Mutex,
 };
 
 use moonlight_common_sys::limelight::_CONNECTION_LISTENER_CALLBACKS;
@@ -96,30 +96,31 @@ pub trait ConnectionListener {
     fn controller_set_led(&mut self, controller_number: u16, r: u8, g: u8, b: u8);
 }
 
-static GLOBAL_CONNECTION_LISTENER: Mutex<Option<Box<dyn ConnectionListener + Send + 'static>>> =
-    Mutex::new(None);
+// SAFETY: moonlight-common-c guarantees that connection callbacks are invoked
+// from a single control stream thread. set_global/clear_global are synchronized
+// by the connection lock in mod.rs.
+struct UnsyncConnectionListener(UnsafeCell<Option<Box<dyn ConnectionListener + Send + 'static>>>);
+unsafe impl Sync for UnsyncConnectionListener {}
+
+static GLOBAL_CONNECTION_LISTENER: UnsyncConnectionListener =
+    UnsyncConnectionListener(UnsafeCell::new(None));
 
 fn global_listener<R>(f: impl FnOnce(&mut dyn ConnectionListener) -> R) -> R {
-    let lock = GLOBAL_CONNECTION_LISTENER.lock();
-    let mut lock = lock.expect("global connection listener");
-
-    let listener = lock.as_mut().expect("global connection listener");
+    // SAFETY: Only called from the single moonlight-common-c control stream thread.
+    let listener = unsafe { &mut *GLOBAL_CONNECTION_LISTENER.0.get() };
+    let listener = listener.as_mut().expect("global connection listener");
     f(listener.as_mut())
 }
 
 pub(crate) fn set_global(listener: impl ConnectionListener + Send + 'static) {
-    let mut global_listener = GLOBAL_CONNECTION_LISTENER
-        .lock()
-        .expect("global connection lock");
-
-    *global_listener = Some(Box::new(listener));
+    unsafe {
+        *GLOBAL_CONNECTION_LISTENER.0.get() = Some(Box::new(listener));
+    }
 }
 pub(crate) fn clear_global() {
-    let mut decoder = GLOBAL_CONNECTION_LISTENER
-        .lock()
-        .expect("global video decoder");
-
-    *decoder = None;
+    unsafe {
+        *GLOBAL_CONNECTION_LISTENER.0.get() = None;
+    }
 }
 
 unsafe extern "C" fn stage_starting(stage: c_int) {

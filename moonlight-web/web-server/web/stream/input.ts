@@ -25,11 +25,11 @@ function trySendChannel(channel: RTCDataChannel | null, buffer: ByteBuffer) {
     }
 
     buffer.flip()
-    const readBuffer = buffer.getReadBuffer()
-    if (readBuffer.length == 0) {
+    const readView = buffer.getReadView()
+    if (readView.byteLength == 0) {
         throw "illegal buffer size"
     }
-    channel.send(readBuffer.buffer)
+    channel.send(readView)
 }
 
 export type MouseScrollMode = "highres" | "normal"

@@ -4,11 +4,14 @@ export const U8_MAX = 255
 export const U16_MAX = 65535
 export const I16_MAX = 32767
 
+const sharedTextEncoder = new TextEncoder()
+
 export class ByteBuffer {
     private position: number = 0
     private limit: number = 0
     private littleEndian: boolean
     private buffer: Uint8Array
+    private view: DataView
 
     constructor(length?: number, littleEndian?: boolean)
     constructor(buffer: Uint8Array, littleEndian?: boolean)
@@ -20,6 +23,7 @@ export class ByteBuffer {
         } else {
             this.buffer = new Uint8Array(value ?? 0)
         }
+        this.view = new DataView(this.buffer.buffer)
     }
 
     private bytesUsed(amount: number, reading: boolean) {
@@ -35,8 +39,7 @@ export class ByteBuffer {
     }
 
     putU8(data: number) {
-        const view = new DataView(this.buffer.buffer)
-        view.setUint8(this.position, data)
+        this.view.setUint8(this.position, data)
         this.bytesUsed(1, false)
     }
     putBool(data: boolean) {
@@ -44,31 +47,26 @@ export class ByteBuffer {
     }
 
     putI8(data: number) {
-        const view = new DataView(this.buffer.buffer)
-        view.setInt8(this.position, data)
+        this.view.setInt8(this.position, data)
         this.bytesUsed(1, false)
     }
 
     putU16(data: number) {
-        const view = new DataView(this.buffer.buffer)
-        view.setUint16(this.position, data, this.littleEndian)
+        this.view.setUint16(this.position, data, this.littleEndian)
         this.bytesUsed(2, false)
     }
     putI16(data: number) {
-        const view = new DataView(this.buffer.buffer)
-        view.setInt16(this.position, data, this.littleEndian)
+        this.view.setInt16(this.position, data, this.littleEndian)
         this.bytesUsed(2, false)
     }
 
     putU32(data: number) {
-        const view = new DataView(this.buffer.buffer)
-        view.setUint32(this.position, data, this.littleEndian)
+        this.view.setUint32(this.position, data, this.littleEndian)
         this.bytesUsed(4, false)
     }
 
     putUtf8(text: string) {
-        const encoder = new TextEncoder()
-        const result = encoder.encodeInto(text, this.buffer.subarray(this.position))
+        const result = sharedTextEncoder.encodeInto(text, this.buffer.subarray(this.position))
 
         this.bytesUsed(result.written, false)
         if (result.read != text.length) {
@@ -77,8 +75,7 @@ export class ByteBuffer {
     }
 
     putF32(data: number) {
-        const view = new DataView(this.buffer.buffer)
-        view.setFloat32(this.position, data, this.littleEndian)
+        this.view.setFloat32(this.position, data, this.littleEndian)
         this.bytesUsed(4, false)
     }
 
@@ -88,14 +85,12 @@ export class ByteBuffer {
     }
 
     getU8(): number {
-        const view = new DataView(this.buffer.buffer)
-        const byte = view.getUint8(this.position)
+        const byte = this.view.getUint8(this.position)
         this.bytesUsed(1, true)
         return byte
     }
     getU16(): number {
-        const view = new DataView(this.buffer.buffer)
-        const byte = view.getUint16(this.position)
+        const byte = this.view.getUint16(this.position)
         this.bytesUsed(2, true)
         return byte
     }
@@ -120,5 +115,10 @@ export class ByteBuffer {
 
     getReadBuffer(): Uint8Array {
         return this.buffer.slice(0, this.limit)
+    }
+
+    /** Returns a zero-copy view of the written data. Use with RTCDataChannel.send() which accepts ArrayBufferView. */
+    getReadView(): Uint8Array {
+        return this.buffer.subarray(0, this.limit)
     }
 }

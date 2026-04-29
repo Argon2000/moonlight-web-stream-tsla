@@ -1,8 +1,8 @@
 use std::{
+    cell::UnsafeCell,
     ffi::c_void,
     os::raw::{c_char, c_int},
     slice,
-    sync::Mutex,
 };
 
 use moonlight_common_sys::limelight::{_AUDIO_RENDERER_CALLBACKS, POPUS_MULTISTREAM_CONFIGURATION};
@@ -35,28 +35,31 @@ pub trait AudioDecoder {
     }
 }
 
-static GLOBAL_AUDIO_DECODER: Mutex<Option<Box<dyn AudioDecoder + Send + 'static>>> =
-    Mutex::new(None);
+// SAFETY: moonlight-common-c guarantees that audio decoder callbacks are invoked
+// from a single thread. set_global/clear_global are synchronized by the connection
+// lock in mod.rs. This eliminates a Mutex lock/unlock on every audio packet (~100-200/sec).
+struct UnsyncAudioDecoder(UnsafeCell<Option<Box<dyn AudioDecoder + Send + 'static>>>);
+unsafe impl Sync for UnsyncAudioDecoder {}
+
+static GLOBAL_AUDIO_DECODER: UnsyncAudioDecoder =
+    UnsyncAudioDecoder(UnsafeCell::new(None));
 
 fn global_decoder<R>(f: impl FnOnce(&mut dyn AudioDecoder) -> R) -> R {
-    let lock = GLOBAL_AUDIO_DECODER.lock();
-    let mut lock = lock.expect("global audio decoder");
-
-    let decoder = lock.as_mut().expect("global audio decoder");
+    // SAFETY: Only called from the single moonlight-common-c audio callback thread.
+    let decoder = unsafe { &mut *GLOBAL_AUDIO_DECODER.0.get() };
+    let decoder = decoder.as_mut().expect("global audio decoder");
     f(decoder.as_mut())
 }
 
 pub(crate) fn set_global(decoder: impl AudioDecoder + Send + 'static) {
-    let mut global_audio_decoder = GLOBAL_AUDIO_DECODER
-        .lock()
-        .expect("global audio decoder lock");
-
-    *global_audio_decoder = Some(Box::new(decoder));
+    unsafe {
+        *GLOBAL_AUDIO_DECODER.0.get() = Some(Box::new(decoder));
+    }
 }
 pub(crate) fn clear_global() {
-    let mut decoder = GLOBAL_AUDIO_DECODER.lock().expect("global video decoder");
-
-    *decoder = None;
+    unsafe {
+        *GLOBAL_AUDIO_DECODER.0.get() = None;
+    }
 }
 
 #[allow(non_snake_case)]

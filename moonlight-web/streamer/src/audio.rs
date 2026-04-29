@@ -50,11 +50,11 @@ impl OpusTrackSampleAudioDecoder {
     }
 }
 
-struct VecSender(UnboundedSender<Vec<u8>>);
+struct VecSender(UnboundedSender<Bytes>);
 impl Write for VecSender {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0
-            .send(buf.to_vec())
+            .send(Bytes::copy_from_slice(buf))
             .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?;
         Ok(buf.len())
     }
@@ -95,7 +95,7 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
         let channel = self.channel.clone();
 
         tokio::spawn(async move {
-            let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel();
+            let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel::<Bytes>();
             let mut writer = PacketWriter::new(VecSender(chunk_tx));
             let serial = 12345;
             let mut granule_pos = 0;
@@ -138,7 +138,7 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
 
             // Send headers
             while let Ok(chunk) = chunk_rx.try_recv() {
-                if let Err(e) = channel.send(&Bytes::from(chunk)).await {
+                if let Err(e) = channel.send(&chunk).await {
                     warn!("Failed to send Ogg headers: {:?}", e);
                 }
             }
@@ -156,7 +156,7 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
                 }
 
                 while let Ok(chunk) = chunk_rx.try_recv() {
-                    if let Err(e) = channel.send(&Bytes::from(chunk)).await {
+                    if let Err(e) = channel.send(&chunk).await {
                         warn!("Failed to send audio data: {:?}", e);
                     }
                 }

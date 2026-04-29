@@ -1,4 +1,4 @@
-use std::{ffi::c_void, os::raw::c_int, slice, sync::Mutex, time::Duration};
+use std::{cell::UnsafeCell, ffi::c_void, os::raw::c_int, slice, time::Duration};
 
 use moonlight_common_sys::limelight::{_DECODER_RENDERER_CALLBACKS, PDECODE_UNIT};
 use num::FromPrimitive;
@@ -37,28 +37,34 @@ pub trait VideoDecoder {
     }
 }
 
-static GLOBAL_VIDEO_DECODER: Mutex<Option<Box<dyn VideoDecoder + Send + 'static>>> =
-    Mutex::new(None);
+// SAFETY: moonlight-common-c guarantees that video decoder callbacks are invoked
+// from a single thread. set_global/clear_global are synchronized by the connection
+// lock in mod.rs. This eliminates a Mutex lock/unlock on every video frame.
+struct UnsyncVideoDecoder(UnsafeCell<Option<Box<dyn VideoDecoder + Send + 'static>>>);
+unsafe impl Sync for UnsyncVideoDecoder {}
+
+static GLOBAL_VIDEO_DECODER: UnsyncVideoDecoder =
+    UnsyncVideoDecoder(UnsafeCell::new(None));
 
 fn global_decoder<R>(f: impl FnOnce(&mut dyn VideoDecoder) -> R) -> R {
-    let lock = GLOBAL_VIDEO_DECODER.lock();
-    let mut lock = lock.expect("global video decoder");
-
-    let decoder = lock.as_mut().expect("global video decoder");
+    // SAFETY: Only called from the single moonlight-common-c video callback thread
+    // between set_global() and clear_global(), which are externally synchronized.
+    let decoder = unsafe { &mut *GLOBAL_VIDEO_DECODER.0.get() };
+    let decoder = decoder.as_mut().expect("global video decoder");
     f(decoder.as_mut())
 }
 
 pub(crate) fn set_global(decoder: impl VideoDecoder + Send + 'static) {
-    let mut global_video_decoder = GLOBAL_VIDEO_DECODER
-        .lock()
-        .expect("global video decoder lock");
-
-    *global_video_decoder = Some(Box::new(decoder));
+    // SAFETY: Called while holding the connection lock, before callbacks start
+    unsafe {
+        *GLOBAL_VIDEO_DECODER.0.get() = Some(Box::new(decoder));
+    }
 }
 pub(crate) fn clear_global() {
-    let mut decoder = GLOBAL_VIDEO_DECODER.lock().expect("global video decoder");
-
-    *decoder = None;
+    // SAFETY: Called while holding the connection lock, after callbacks stop
+    unsafe {
+        *GLOBAL_VIDEO_DECODER.0.get() = None;
+    }
 }
 
 #[allow(non_snake_case)]
@@ -86,19 +92,18 @@ unsafe extern "C" fn start() {
     })
 }
 
-static BUFFER: Mutex<Vec<VideoDataBuffer<'static>>> = Mutex::new(Vec::new());
+// SAFETY: Same single-thread guarantee as GLOBAL_VIDEO_DECODER above.
+struct UnsyncBuffer(UnsafeCell<Vec<VideoDataBuffer<'static>>>);
+unsafe impl Sync for UnsyncBuffer {}
+
+static BUFFER: UnsyncBuffer = UnsyncBuffer(UnsafeCell::new(Vec::new()));
 
 unsafe extern "C" fn submit_decode_unit(decode_unit: PDECODE_UNIT) -> c_int {
     let raw = unsafe { *decode_unit };
 
-    // # Safety
-    // This buffer is always cleared after (or before use when poisened)
-    // -> The data will only be able to be here this call
-    let mut buffers = BUFFER.lock().unwrap_or_else(|buf| {
-        let mut buf = buf.into_inner();
-        buf.clear();
-        buf
-    });
+    // SAFETY: Only accessed from the single video callback thread.
+    let buffers = unsafe { &mut *BUFFER.0.get() };
+    buffers.clear();
 
     let mut next_element_ptr = raw.bufferList;
     while !next_element_ptr.is_null() {

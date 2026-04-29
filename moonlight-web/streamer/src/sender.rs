@@ -1,8 +1,8 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use log::warn;
 use tokio::sync::{
-    Mutex,
     mpsc::{Receiver, Sender, channel},
 };
 use webrtc::{
@@ -139,14 +139,14 @@ impl TrackLike for TrackLocalStaticSample {
 
 pub struct SequencedTrackLocalStaticRTP {
     track: Arc<TrackLocalStaticRTP>,
-    sequence_number: Mutex<u16>,
+    sequence_number: AtomicU16,
 }
 
 impl From<TrackLocalStaticRTP> for SequencedTrackLocalStaticRTP {
     fn from(value: TrackLocalStaticRTP) -> Self {
         Self {
             track: Arc::new(value),
-            sequence_number: Mutex::new(0),
+            sequence_number: AtomicU16::new(0),
         }
     }
 }
@@ -172,9 +172,7 @@ impl TrackLike for SequencedTrackLocalStaticRTP {
             // TODO: maybe warn?
         }
 
-        let mut sequence_number = self.sequence_number.lock().await;
-        sample.header.sequence_number = *sequence_number;
-        *sequence_number = sequence_number.wrapping_add(1);
+        sample.header.sequence_number = self.sequence_number.fetch_add(1, Ordering::Relaxed);
 
         self.track
             .write_rtp_with_extensions(&sample, extensions)

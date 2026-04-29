@@ -3,7 +3,10 @@ use std::{
     os::raw::{c_char, c_int, c_schar, c_short, c_uchar, c_uint},
     ptr::null_mut,
     str::FromStr,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -43,13 +46,16 @@ pub mod video;
 
 static INSTANCE: LazyLock<Arc<Handle>> = LazyLock::new(|| {
     Arc::new(Handle {
-        connection_exists: Mutex::new(false),
+        connection_lock: Mutex::new(()),
+        connection_exists: AtomicBool::new(false),
     })
 });
 
 pub(crate) struct Handle {
-    /// This is also the lock because start / stop Connection is not thread safe
-    connection_exists: Mutex<bool>,
+    /// Lock for start/stop Connection (not thread safe in C)
+    connection_lock: Mutex<()>,
+    /// Fast atomic flag for is_connected() checks
+    connection_exists: AtomicBool,
 }
 
 impl Handle {
@@ -134,17 +140,17 @@ impl MoonlightStream {
         audio_decoder: impl AudioDecoder + Send + 'static,
     ) -> Result<Self, MoonlightError> {
         unsafe {
-            let mut connection_guard = handle
-                .connection_exists
-                .lock()
-                .expect("connection lock poisoned");
-            if *connection_guard {
-                return Err(MoonlightError::ConnectionAlreadyExists);
+            {
+                let _connection_guard = handle
+                    .connection_lock
+                    .lock()
+                    .expect("connection lock poisoned");
+                if handle.connection_exists.load(Ordering::Acquire) {
+                    return Err(MoonlightError::ConnectionAlreadyExists);
+                }
+
+                handle.connection_exists.store(true, Ordering::Release);
             }
-
-            *connection_guard = true;
-
-            drop(connection_guard);
 
             let address = CString::from_str(server_info.address)?;
             let app_version = server_info.app_version.to_string();
@@ -218,9 +224,7 @@ impl MoonlightStream {
     // For internal use only as it's possible for this connection to be cancelled
     // and then the next connection setting connection_exists to true
     fn is_connected(&self) -> bool {
-        let result = self.handle.connection_exists.lock();
-
-        result.map(|x| *x).unwrap_or(false)
+        self.handle.connection_exists.load(Ordering::Acquire)
     }
 
     /// This function returns any extended feature flags supported by the host.
@@ -739,9 +743,9 @@ impl Drop for MoonlightStream {
         unsafe {
             // # Safety
             // LiStopConnection is not thread safe so we need a mutex
-            let mut connection_guard = self
+            let _connection_guard = self
                 .handle
-                .connection_exists
+                .connection_lock
                 .lock()
                 .expect("connection lock poisoned");
 
@@ -752,9 +756,7 @@ impl Drop for MoonlightStream {
             video::clear_global();
             audio::clear_global();
 
-            *connection_guard = false;
-
-            drop(connection_guard);
+            self.handle.connection_exists.store(false, Ordering::Release);
         }
     }
 }

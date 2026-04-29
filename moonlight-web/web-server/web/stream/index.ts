@@ -67,6 +67,7 @@ export class Stream {
     private audioContext: AudioContext | null = null
     private mainGainNode: GainNode | null = null
     private audioDecoder: typeof OpusStreamDecoder | null = null
+    private audioDecoderReady: boolean = false
     private nextAudioTime: number = 0
     private sourceNodes: Set<AudioBufferSourceNode> = new Set()
     private isFirstAudioPacket: boolean = true
@@ -151,6 +152,7 @@ export class Stream {
             });
 
             await this.audioDecoder.ready;
+            this.audioDecoderReady = true;
             this.debugLog("Opus decoder ready");
         } catch (e) {
             console.error("Failed to setup opus decoder", e);
@@ -241,6 +243,16 @@ export class Stream {
         source.onended = () => {
             this.sourceNodes.delete(source);
         };
+
+        // Guard against sourceNodes leak if onended doesn't fire (constrained browsers)
+        if (this.sourceNodes.size > 100) {
+            for (const staleNode of this.sourceNodes) {
+                if (staleNode !== source) {
+                    try { staleNode.stop(); } catch(e) {}
+                    this.sourceNodes.delete(staleNode);
+                }
+            }
+        }
     }
 
     private debugLog(message: string) {
@@ -553,13 +565,12 @@ export class Stream {
         }
     }
 
-    private async onAudioDataChannelMessage(event: MessageEvent) {
-        if (!this.audioDecoder) return;
+    private onAudioDataChannelMessage(event: MessageEvent) {
+        if (!this.audioDecoder || !this.audioDecoderReady) return;
         
         try {
             const arrayBuffer = event.data;
             const data = new Uint8Array(arrayBuffer, 0, arrayBuffer.byteLength);
-            await this.audioDecoder.ready;
             this.audioDecoder.decode(data);
         } catch (e) {
             console.error("Error decoding audio", e);

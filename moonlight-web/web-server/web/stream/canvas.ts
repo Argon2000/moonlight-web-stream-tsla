@@ -103,10 +103,9 @@ export class CanvasRenderer {
                     break
                 }
                 
-                if (this.latestFrame) {
-                    this.latestFrame.close()
-                }
+                const old = this.latestFrame
                 this.latestFrame = value
+                if (old) old.close()
             }
         } catch (e) {
             console.error("Error reading video frame:", e)
@@ -124,6 +123,10 @@ export class CanvasRenderer {
         // Calculate aspect ratios
         const canvasAspect = this.canvas.clientWidth / this.canvas.clientHeight
         const frameAspect = frame.displayWidth / frame.displayHeight
+
+        // Reset offsets to avoid stale values from a previous layout
+        this.offsetX = 0
+        this.offsetY = 0
 
         if (this.stretchToFit) {
             this.canvas.width = this.canvas.clientWidth
@@ -203,8 +206,10 @@ export class CanvasRenderer {
             this.onFirstFrameAfterResize(frame)
         }
 
-        // Clear the canvas before drawing the new frame to prevent artifacts
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+        // Only clear when there's letterboxing/pillarboxing; full-frame draw overwrites everything
+        if (this.offsetX !== 0 || this.offsetY !== 0) {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+        }
         this.ctx.drawImage(frame, this.offsetX, this.offsetY, this.drawWidth, this.drawHeight)
         frame.close() // Close the VideoFrame to release resources
     }
