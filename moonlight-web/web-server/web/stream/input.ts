@@ -80,6 +80,7 @@ export class StreamInput {
 
     private touchSupported: boolean | null = null
     private previousStates: { [internalId: number]: GamepadState } = {}
+    private scratchState: GamepadState = { buttonFlags: 0, leftTrigger: 0, rightTrigger: 0, leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0 }
 
     constructor(config?: StreamInputConfig, peer?: RTCPeerConnection,) {
         if (peer) {
@@ -677,6 +678,7 @@ export class StreamInput {
         }
     }
     onGamepadUpdate() {
+        if (this.gamepads.size === 0) return
         const gamepads = navigator.getGamepads()
         for (const [gamepadIndex, internalId] of this.gamepads.entries()) {
             try {
@@ -689,11 +691,11 @@ export class StreamInput {
                     continue
                 }
 
-                const state = extractGamepadState(gamepad, this.config.controllerConfig)
+                const state = extractGamepadState(gamepad, this.config.controllerConfig, this.scratchState)
 
                 if (!this.previousStates[internalId] || !this.areGamepadStatesEqual(this.previousStates[internalId], state)) {
                     this.sendController(internalId, state)
-                    this.previousStates[internalId] = state
+                    this.previousStates[internalId] = { ...state }
                 }
             } catch (e) {
                 console.error("[Input]: Error processing gamepad update", e)

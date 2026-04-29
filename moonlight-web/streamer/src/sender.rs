@@ -92,13 +92,14 @@ async fn sample_sender<Track>(track: Arc<Track>, mut receiver: Receiver<Track::S
 where
     Track: TrackLike,
 {
+    let extensions = [HeaderExtension::PlayoutDelay(PlayoutDelayExtension::new(
+        0, 0,
+    ))];
     while let Some(sample) = receiver.recv().await {
         if let Err(err) = track
             .write_with_extensions(
                 sample,
-                &[HeaderExtension::PlayoutDelay(PlayoutDelayExtension::new(
-                    0, 0,
-                ))],
+                &extensions,
             )
             .await
         {

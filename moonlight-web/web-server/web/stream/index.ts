@@ -569,9 +569,7 @@ export class Stream {
         if (!this.audioDecoder || !this.audioDecoderReady) return;
         
         try {
-            const arrayBuffer = event.data;
-            const data = new Uint8Array(arrayBuffer, 0, arrayBuffer.byteLength);
-            this.audioDecoder.decode(data);
+            this.audioDecoder.decode(new Uint8Array(event.data));
         } catch (e) {
             console.error("Error decoding audio", e);
         }

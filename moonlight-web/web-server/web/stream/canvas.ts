@@ -163,44 +163,7 @@ export class CanvasRenderer {
         }
 
         const frame = this.latestFrame
-        this.latestFrame = null // Clear reference so we don't draw it again (or close it twice)
-        // Note: readLoop might overwrite latestFrame before we draw it, which is fine (we skip frames).
-        // But we just took a reference 'frame'.
-        // If readLoop updates 'this.latestFrame', it will close the *new* one when it updates again.
-        // Wait, ownership issue:
-        // readLoop sets latestFrame = frame1.
-        // drawLoop takes frame = latestFrame (frame1).
-        // readLoop sets latestFrame = frame2. Closes old latestFrame (frame1).
-        // drawLoop tries to draw frame (frame1) which is now closed!
-        
-        // Fix: readLoop should NOT close the frame if it's currently being drawn?
-        // Or drawLoop should clone? VideoFrame clone is cheap (shallow copy of handle).
-        // Better: drawLoop takes ownership by setting this.latestFrame = null?
-        // If readLoop sees latestFrame is not null, it closes it.
-        // Race condition:
-        // readLoop: sets latestFrame = frame1.
-        // drawLoop: takes frame = latestFrame (frame1), sets this.latestFrame = null.
-        // readLoop: gets frame2. Checks this.latestFrame (null). Sets this.latestFrame = frame2.
-        // drawLoop: draws frame1. Closes frame1.
-        // This works!
-        // What if readLoop is faster?
-        // readLoop: sets latestFrame = frame1.
-        // readLoop: gets frame2. Checks latestFrame (frame1). Closes frame1. Sets latestFrame = frame2.
-        // drawLoop: takes frame = latestFrame (frame2). Sets latestFrame = null.
-        // drawLoop: draws frame2. Closes frame2.
-        // We dropped frame1. Correct.
-        
-        // What if drawLoop is faster?
-        // drawLoop: latestFrame is null. Returns.
-        
-        // So the logic holds:
-        // readLoop: if (this.latestFrame) this.latestFrame.close(); this.latestFrame = value;
-        // drawLoop: frame = this.latestFrame; this.latestFrame = null; if(frame) { draw(frame); frame.close(); }
-        
-        // One edge case: readLoop sets frame1. drawLoop takes it (sets field to null).
-        // readLoop sets frame2 (sees null, doesn't close anything).
-        // drawLoop draws frame1 and closes it.
-        // Perfectly safe.
+        this.latestFrame = null
         
         if(this.drawWidth === 0) {
             this.onFirstFrameAfterResize(frame)

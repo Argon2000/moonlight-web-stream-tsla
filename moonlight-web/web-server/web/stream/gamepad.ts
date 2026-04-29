@@ -61,7 +61,7 @@ export type GamepadState = {
     rightStickY: number
 }
 
-export function extractGamepadState(gamepad: Gamepad, config: ControllerConfig): GamepadState {
+export function extractGamepadState(gamepad: Gamepad, config: ControllerConfig, out: GamepadState): GamepadState {
     let buttonFlags = 0
     for (let buttonId = 0; buttonId < gamepad.buttons.length; buttonId++) {
         const button = gamepad.buttons[buttonId]
@@ -75,21 +75,13 @@ export function extractGamepadState(gamepad: Gamepad, config: ControllerConfig):
         }
     }
 
-    const leftTrigger = gamepad.buttons[6]?.value ?? 0
-    const rightTrigger = gamepad.buttons[7]?.value ?? 0
+    out.buttonFlags = buttonFlags
+    out.leftTrigger = gamepad.buttons[6]?.value ?? 0
+    out.rightTrigger = gamepad.buttons[7]?.value ?? 0
+    out.leftStickX = gamepad.axes[0] ?? 0
+    out.leftStickY = gamepad.axes[1] ?? 0
+    out.rightStickX = gamepad.axes[2] ?? 0
+    out.rightStickY = gamepad.axes[3] ?? 0
 
-    const leftStickX = gamepad.axes[0] ?? 0
-    const leftStickY = gamepad.axes[1] ?? 0
-    const rightStickX = gamepad.axes[2] ?? 0
-    const rightStickY = gamepad.axes[3] ?? 0
-
-    return {
-        buttonFlags,
-        leftTrigger,
-        rightTrigger,
-        leftStickX,
-        leftStickY,
-        rightStickX,
-        rightStickY
-    }
+    return out
 }

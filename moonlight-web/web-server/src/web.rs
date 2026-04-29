@@ -13,6 +13,8 @@ pub fn web_service() -> impl HttpServiceFactory {
     let files = Files::new("/", "static").index_file("index.html");
 
     files
+        .use_etag(true)
+        .use_last_modified(true)
 }
 
 pub fn web_config_js_service() -> impl HttpServiceFactory {
