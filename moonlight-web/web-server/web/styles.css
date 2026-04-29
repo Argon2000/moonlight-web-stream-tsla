@@ -583,6 +583,39 @@ canvas.video-stream {
     width: 100%;
     height: 100%;
     object-fit: contain;
+    will-change: contents;
+}
+
+/** Stream Stats Overlay */
+.stream-stats-overlay {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.65);
+    color: #0f0;
+    font-family: "Courier New", monospace;
+    font-size: 0.75rem;
+    padding: 8px 12px;
+    border-radius: 4px;
+    pointer-events: none;
+    line-height: 1.5;
+    min-width: 180px;
+}
+
+.stream-stats-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.stream-stats-label {
+    color: #ccc;
+}
+
+.stream-stats-value {
+    color: #0f0;
+    text-align: right;
 }
 
 .sidebar-stream {

@@ -23,16 +23,17 @@ export type StreamSettings = {
     controllerConfig: ControllerConfig
     toggleFullscreenWithKeybind: boolean,
     stretchToFit: boolean,
+    showStreamStats: boolean,
 }
 
 export function defaultStreamSettings(): StreamSettings {
     return {
         sidebarEdge: "left",
-        bitrate: 3000,
-        packetSize: 256,
-        fps: 60,
+        bitrate: 5000,
+        packetSize: 1024,
+        fps: 120,
         videoSampleQueueSize: 2,
-        videoSize: "720p",
+        videoSize: "1080p",
         videoSizeCustom: {
             width: 960,
             height: 540,
@@ -48,6 +49,7 @@ export function defaultStreamSettings(): StreamSettings {
         },
         toggleFullscreenWithKeybind: false,
         stretchToFit: true,
+        showStreamStats: false,
     }
 }
 
@@ -102,6 +104,7 @@ export class StreamSettingsComponent implements Component {
 
     private toggleFullscreenWithKeybind: InputComponent
     private stretchToFit: InputComponent
+    private showStreamStats: InputComponent
 
     constructor(settings?: StreamSettings) {
         const defaultSettings = defaultStreamSettings()
@@ -295,6 +298,13 @@ export class StreamSettingsComponent implements Component {
         this.toggleFullscreenWithKeybind.addChangeListener(this.onSettingsChange.bind(this))
         this.toggleFullscreenWithKeybind.mount(advancedSection)
 
+        // Show Stream Stats
+        this.showStreamStats = new InputComponent("showStreamStats", "checkbox", "Show Stream Stats Overlay", {
+            checked: settings?.showStreamStats ?? defaultSettings.showStreamStats
+        })
+        this.showStreamStats.addChangeListener(this.onSettingsChange.bind(this))
+        this.showStreamStats.mount(advancedSection)
+
         this.onSettingsChange()
     }
 
@@ -343,6 +353,7 @@ export class StreamSettingsComponent implements Component {
 
         settings.toggleFullscreenWithKeybind = this.toggleFullscreenWithKeybind.isChecked()
         settings.stretchToFit = this.stretchToFit.isChecked()
+        settings.showStreamStats = this.showStreamStats.isChecked()
 
         return settings
     }

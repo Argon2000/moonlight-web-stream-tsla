@@ -12,6 +12,7 @@ import { CanvasRenderer } from "./stream/canvas.js";
 import { StreamCapabilities, StreamKeys } from "./api_bindings.js";
 import { ScreenKeyboard, TextEvent } from "./screen_keyboard.js";
 import { FormModal } from "./component/modal/form.js";
+import { StreamStatsOverlay } from "./component/stream_stats.js";
 
 async function startApp() {
     const api = await getApi()
@@ -77,6 +78,7 @@ class ViewerApp implements Component {
 
     private canvasRenderer: CanvasRenderer | null = null
     private settings: StreamSettings
+    private statsOverlay: StreamStatsOverlay
 
     private streamerSize: [number, number]
 
@@ -109,6 +111,10 @@ class ViewerApp implements Component {
 
         this.previousMouseMode = this.inputConfig.mouseMode
         this.toggleFullscreenWithKeybind = settings.toggleFullscreenWithKeybind
+
+        // Create stats overlay early (before startStream which uses it async)
+        this.statsOverlay = new StreamStatsOverlay()
+
         this.startStream(hostId, appId, settings, [browserWidth, browserHeight])
 
         this.streamerSize = getStreamerSize(settings, [browserWidth, browserHeight])
@@ -160,6 +166,12 @@ class ViewerApp implements Component {
 
         this.div.appendChild(this.videoElement)
 
+        // Configure stats overlay
+        this.statsOverlay.mount(this.div)
+        if (!settings.showStreamStats) {
+            this.statsOverlay.hide()
+        }
+
         // Configure input
         this.addListeners(document)
         this.addListeners(document.getElementById("input") as HTMLDivElement)
@@ -206,6 +218,12 @@ class ViewerApp implements Component {
         }
 
         this.stream = new Stream(this.api, hostId, appId, settings, supportedVideoFormats, browserSize)
+
+        // Wire stats overlay to WebRTC peer (lazily resolved since peer is created async)
+        this.statsOverlay.setPeerGetter(() => this.stream?.getPeer() ?? null)
+        if (settings.showStreamStats) {
+            this.statsOverlay.show()
+        }
 
         // Add app info listener
         this.stream.addInfoListener(this.onInfo.bind(this))
@@ -498,6 +516,13 @@ class ViewerApp implements Component {
     }
     isFullscreen(): boolean {
         return "fullscreenElement" in document && !!document.fullscreenElement
+    }
+    toggleStats() {
+        if (this.statsOverlay.isVisible()) {
+            this.statsOverlay.hide()
+        } else {
+            this.statsOverlay.show()
+        }
     }
     private async onFullscreenChange() {
         this.cachedStreamRect = null
@@ -853,6 +878,14 @@ class ViewerSidebar implements Component, Sidebar {
             }
         })
         this.buttonDiv.appendChild(this.fullscreenButton)
+
+        // Toggle Stats
+        const statsButton = document.createElement("button")
+        statsButton.innerText = "Toggle Stats"
+        statsButton.addEventListener("click", () => {
+            this.app.toggleStats()
+        })
+        this.buttonDiv.appendChild(statsButton)
 
 
         // Select Mouse Mode
