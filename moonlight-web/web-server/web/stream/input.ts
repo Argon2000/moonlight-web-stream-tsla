@@ -737,17 +737,15 @@ export class StreamInput {
         if (!(event.data instanceof ArrayBuffer)) {
             return
         }
-        this.buffer.reset()
+        const buffer = new ByteBuffer(new Uint8Array(event.data))
+        buffer.flip()
 
-        this.buffer.putU8Array(new Uint8Array(event.data))
-        this.buffer.flip()
-
-        const ty = this.buffer.getU8()
+        const ty = buffer.getU8()
         if (ty == 0) {
             // Rumble
-            const id = this.buffer.getU8()
-            const lowFrequencyMotor = this.buffer.getU16() / U16_MAX
-            const highFrequencyMotor = this.buffer.getU16() / U16_MAX
+            const id = buffer.getU8()
+            const lowFrequencyMotor = buffer.getU16() / U16_MAX
+            const highFrequencyMotor = buffer.getU16() / U16_MAX
 
             const gamepadIndex = this.getGamepadIndex(id)
             if (gamepadIndex == undefined) {
@@ -757,9 +755,9 @@ export class StreamInput {
             this.setGamepadEffect(id, "dual-rumble", { lowFrequencyMotor, highFrequencyMotor })
         } else if (ty == 1) {
             // Trigger Rumble
-            const id = this.buffer.getU8()
-            const leftTrigger = this.buffer.getU16() / U16_MAX
-            const rightTrigger = this.buffer.getU16() / U16_MAX
+            const id = buffer.getU8()
+            const leftTrigger = buffer.getU16() / U16_MAX
+            const rightTrigger = buffer.getU16() / U16_MAX
 
             const gamepadIndex = this.getGamepadIndex(id)
             if (gamepadIndex == undefined) {

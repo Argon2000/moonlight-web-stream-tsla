@@ -114,6 +114,13 @@ impl StreamInput {
             let connection = connection.clone();
 
             let f = f.clone();
+            // Fast path: try_read avoids async suspend when no writer holds the lock (99.9% of the time)
+            if let Ok(stream) = connection.stream.try_read() {
+                if let Some(stream) = stream.as_ref() {
+                    f(stream, message);
+                }
+                return Box::pin(async {});
+            }
             Box::pin(async move {
                 let stream = connection.stream.read().await;
                 if let Some(stream) = stream.as_ref() {
