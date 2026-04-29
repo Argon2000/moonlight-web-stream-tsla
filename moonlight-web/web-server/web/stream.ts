@@ -151,7 +151,7 @@ class ViewerApp implements Component {
         if(this.settings.canvasRenderer) {
             this.canvasElement.classList.add("video-stream")
             this.div.appendChild(this.canvasElement)
-            this.canvasRenderer = new CanvasRenderer(this.canvasElement)
+            this.canvasRenderer = new CanvasRenderer(this.canvasElement, settings.stretchToFit)
             this.videoElement.autoplay = false
         }
 
@@ -629,7 +629,10 @@ class ViewerApp implements Component {
             let height = canvasCssHeight
             let videoMultiplier
 
-            if (boundingRectAspect > videoAspect) {
+            if (this.settings?.stretchToFit) {
+                // If stretched, the input rect is simply the canvas's client rect
+                return clientRect
+            } else if (boundingRectAspect > videoAspect) {
                 // Canvas is wider than video aspect, video will be pillarboxed
                 videoMultiplier = canvasCssHeight / videoSize[1]
                 const videoRenderedWidth = videoSize[0] * videoMultiplier

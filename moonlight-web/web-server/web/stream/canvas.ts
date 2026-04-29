@@ -12,7 +12,9 @@ export class CanvasRenderer {
     frameReader: ReadableStreamDefaultReader | null
     latestFrame: VideoFrame | null
     isRunning: boolean = false
-    constructor(canvasElement: HTMLCanvasElement) {
+    private stretchToFit: boolean
+    private handleResize: () => void
+    constructor(canvasElement: HTMLCanvasElement, stretchToFit: boolean) {
         this.canvas = canvasElement
         this.ctx = canvasElement.getContext("2d")
         this.videoTrack = null
@@ -20,7 +22,24 @@ export class CanvasRenderer {
         this.readableStream = null
         this.frameReader = null
         this.latestFrame = null
+        this.stretchToFit = stretchToFit
         this.drawLoop = this.drawLoop.bind(this)
+        this.handleResize = () => {
+            if (!this.canvas) return
+            if (this.stretchToFit) {
+                this.canvas.width = this.canvas.clientWidth
+                this.canvas.height = this.canvas.clientHeight
+                this.drawWidth = this.canvas.width
+                this.drawHeight = this.canvas.height
+                this.offsetX = 0
+                this.offsetY = 0
+            } else {
+                // For non-stretch mode we need the next video frame to recalc sizes
+                this.drawWidth = 0
+                this.drawHeight = 0
+            }
+        }
+        window.addEventListener("resize", this.handleResize)
     }
 
     setVideoTrack(track: MediaStreamTrack) {
@@ -106,19 +125,28 @@ export class CanvasRenderer {
         const canvasAspect = this.canvas.clientWidth / this.canvas.clientHeight
         const frameAspect = frame.displayWidth / frame.displayHeight
 
-        this.canvas.width = frame.displayWidth
-        this.canvas.height = frame.displayHeight
-
-        if (canvasAspect > frameAspect) {
-            // Canvas is wider than the video frame, so the video will be pillarboxed.
-            this.drawHeight = this.canvas.height
-            this.drawWidth = this.drawHeight * frameAspect
-            this.offsetX = (this.canvas.width - this.drawWidth) / 2
-        } else {
-            // Canvas is taller than the video frame, so the video will be letterboxed.
+        if (this.stretchToFit) {
+            this.canvas.width = this.canvas.clientWidth
+            this.canvas.height = this.canvas.clientHeight
             this.drawWidth = this.canvas.width
-            this.drawHeight = this.drawWidth / frameAspect
-            this.offsetY = (this.canvas.height - this.drawHeight) / 2
+            this.drawHeight = this.canvas.height
+            this.offsetX = 0
+            this.offsetY = 0
+        } else {
+            this.canvas.width = frame.displayWidth
+            this.canvas.height = frame.displayHeight
+
+            if (canvasAspect > frameAspect) {
+                // Canvas is wider than the video frame, so the video will be pillarboxed.
+                this.drawHeight = this.canvas.height
+                this.drawWidth = this.drawHeight * frameAspect
+                this.offsetX = (this.canvas.width - this.drawWidth) / 2
+            } else {
+                // Canvas is taller than the video frame, so the video will be letterboxed.
+                this.drawWidth = this.canvas.width
+                this.drawHeight = this.drawWidth / frameAspect
+                this.offsetY = (this.canvas.height - this.drawHeight) / 2
+            }
         }
     }
 
@@ -183,6 +211,9 @@ export class CanvasRenderer {
 
     destroy() {
         this.stopRendering()
+        if (this.handleResize) {
+            window.removeEventListener("resize", this.handleResize)
+        }
         this.canvas = null
         this.ctx = null
     }

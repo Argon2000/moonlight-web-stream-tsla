@@ -21,20 +21,21 @@ export type StreamSettings = {
     audioSampleQueueSize: number
     mouseScrollMode: MouseScrollMode
     controllerConfig: ControllerConfig
-    toggleFullscreenWithKeybind: boolean
+    toggleFullscreenWithKeybind: boolean,
+    stretchToFit: boolean,
 }
 
 export function defaultStreamSettings(): StreamSettings {
     return {
         sidebarEdge: "left",
         bitrate: 3000,
-        packetSize: 512,
+        packetSize: 256,
         fps: 60,
-        videoSampleQueueSize: 3,
+        videoSampleQueueSize: 2,
         videoSize: "720p",
         videoSizeCustom: {
-            width: 640,
-            height: 360,
+            width: 960,
+            height: 540,
         },
         dontForceH264: false,
         canvasRenderer: true,
@@ -45,7 +46,8 @@ export function defaultStreamSettings(): StreamSettings {
             invertAB: false,
             invertXY: false
         },
-        toggleFullscreenWithKeybind: false
+        toggleFullscreenWithKeybind: false,
+        stretchToFit: true,
     }
 }
 
@@ -99,6 +101,7 @@ export class StreamSettingsComponent implements Component {
     private controllerInvertXY: InputComponent
 
     private toggleFullscreenWithKeybind: InputComponent
+    private stretchToFit: InputComponent
 
     constructor(settings?: StreamSettings) {
         const defaultSettings = defaultStreamSettings()
@@ -168,7 +171,7 @@ export class StreamSettingsComponent implements Component {
         this.fps = new InputComponent("fps", "number", "Fps", {
             defaultValue: defaultSettings.fps.toString(),
             value: settings?.fps?.toString(),
-            step: "100"
+            step: "5"
         })
         this.fps.addChangeListener(this.onSettingsChange.bind(this))
         this.fps.mount(basicSection)
@@ -279,6 +282,13 @@ export class StreamSettingsComponent implements Component {
         this.canvasRenderer.addChangeListener(this.onSettingsChange.bind(this))
         this.canvasRenderer.mount(advancedSection)
 
+        // Stretch to fit
+        this.stretchToFit = new InputComponent("stretchToFit", "checkbox", "Stretch image to fit window (Canvas Renderer Only)", {
+            checked: settings?.stretchToFit ?? defaultSettings.stretchToFit
+        })
+        this.stretchToFit.addChangeListener(this.onSettingsChange.bind(this))
+        this.stretchToFit.mount(advancedSection)
+
         this.toggleFullscreenWithKeybind = new InputComponent("toggleFullscreenWithKeybind", "checkbox", "Toggle Fullscreen and Mouse Lock with Ctrl + Shift + I", {
             checked: settings?.toggleFullscreenWithKeybind
         })
@@ -332,6 +342,7 @@ export class StreamSettingsComponent implements Component {
         settings.controllerConfig.invertXY = this.controllerInvertXY.isChecked()
 
         settings.toggleFullscreenWithKeybind = this.toggleFullscreenWithKeybind.isChecked()
+        settings.stretchToFit = this.stretchToFit.isChecked()
 
         return settings
     }
