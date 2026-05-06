@@ -20,6 +20,7 @@ export class ByteBuffer {
 
         if (value instanceof Uint8Array) {
             this.buffer = value
+            this.limit = value.length
         } else {
             this.buffer = new Uint8Array(value ?? 0)
         }

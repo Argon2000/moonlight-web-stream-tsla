@@ -738,7 +738,6 @@ export class StreamInput {
             return
         }
         const buffer = new ByteBuffer(new Uint8Array(event.data))
-        buffer.flip()
 
         const ty = buffer.getU8()
         if (ty == 0) {
