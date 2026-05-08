@@ -17,6 +17,7 @@ export type InfoEvent = CustomEvent<
     { type: "connectionComplete", capabilities: StreamCapabilities } |
     { type: "connectionStatus", status: ConnectionStatus } |
     { type: "connectionTerminated", errorCode: number } |
+    { type: "connectionRecovered" } |
     { type: "addDebugLine", line: string } |
     { type: "videoTrack", track: MediaStreamTrack}
 >
@@ -164,11 +165,32 @@ export class Stream {
         try {
             // @ts-ignore
             const AudioContext = window.AudioContext || window.webkitAudioContext;
-            this.audioContext = new AudioContext();
+            // Force 48kHz to match Opus native rate and avoid resampling artifacts
+            this.audioContext = new AudioContext({ sampleRate: 48000 });
             
+            // Gain node to boost volume to match car audio levels
             this.mainGainNode = this.audioContext.createGain();
-            this.mainGainNode.gain.value = 4.0;
-            this.mainGainNode.connect(this.audioContext.destination);
+            this.mainGainNode.gain.value = 3.5;
+
+            // Compressor acting as a limiter to prevent clipping distortion
+            // This allows high gain without the harsh noise/humming from signal clipping
+            const compressor = this.audioContext.createDynamicsCompressor();
+            compressor.threshold.value = -3;   // Start limiting 3dB below max
+            compressor.knee.value = 3;          // Gentle knee for smoother limiting
+            compressor.ratio.value = 20;        // High ratio = hard limiter
+            compressor.attack.value = 0.001;    // Fast attack to catch transients
+            compressor.release.value = 0.05;    // Quick release to avoid pumping
+
+            // Low-pass filter to cut high-frequency noise/aliasing artifacts
+            const lpFilter = this.audioContext.createBiquadFilter();
+            lpFilter.type = "lowpass";
+            lpFilter.frequency.value = 20000;
+            lpFilter.Q.value = 0.7;
+
+            // Chain: source -> gain -> compressor/limiter -> lowpass -> destination
+            this.mainGainNode.connect(compressor);
+            compressor.connect(lpFilter);
+            lpFilter.connect(this.audioContext.destination);
 
             this.monitorAudioContext();
         } catch (e) {
@@ -189,35 +211,35 @@ export class Stream {
     private playPcm(left: Float32Array, right: Float32Array) {
         if (!this.audioContext) return;
 
+        // Resume context if suspended (autoplay policy)
+        if (this.audioContext.state === 'suspended') {
+            this.audioContext.resume();
+        }
+
         const currentTime = this.audioContext.currentTime;
         
         if (this.isFirstAudioPacket) {
-            this.nextAudioTime = currentTime + 0.05;
+            // Larger initial buffer to allow smooth scheduling and avoid early underruns
+            this.nextAudioTime = currentTime + 0.08;
             this.isFirstAudioPacket = false;
         }
 
         let ahead = this.nextAudioTime - currentTime;
 
         // Latency Control (reset if too far behind or ahead)
-        const MAX_LATENCY = 0.20; // 200ms
+        const MAX_LATENCY = 0.15; // 150ms — tighter for lower perceived latency
         if (ahead > MAX_LATENCY) {
-            // We are too far ahead (high latency), clear buffer to catch up
             for (const node of this.sourceNodes) {
                 try { node.stop(); } catch(e) {}
             }
             this.sourceNodes.clear();
-            
-            // Catch up but keep a tiny buffer to avoid immediate underrun
-            // For Tesla (cellular), we increase this slightly to prevent robotic artifacts
-            const resetBuffer = 0.05;
-            this.nextAudioTime = currentTime + resetBuffer;
-            ahead = 0;
+            this.nextAudioTime = currentTime + 0.04;
+            ahead = this.nextAudioTime - currentTime;
         }
 
-        if (ahead < 0) {
-             // We are behind (underrun), jump to current time + small buffer
-             const underrunBuffer = 0.05;
-             this.nextAudioTime = currentTime + underrunBuffer;
+        if (ahead < -0.02) {
+             // We are behind (underrun), resync with a small buffer
+             this.nextAudioTime = currentTime + 0.04;
         }
 
         const channels = 2;
@@ -237,7 +259,7 @@ export class Stream {
         }
         
         source.start(this.nextAudioTime);
-        this.nextAudioTime += audioBuffer.duration// / playbackRate;
+        this.nextAudioTime += audioBuffer.duration;
         
         this.sourceNodes.add(source);
         source.onended = () => {
@@ -535,13 +557,25 @@ export class Stream {
         }
         this.debugLog(`Changing Peer State to ${this.peer.connectionState}`)
 
-        if (this.peer.connectionState == "failed" || this.peer.connectionState == "disconnected" || this.peer.connectionState == "closed") {
+        if (this.peer.connectionState == "failed" || this.peer.connectionState == "closed") {
             const customEvent: InfoEvent = new CustomEvent("stream-info", {
                 detail: {
                     type: "error",
                     message: `Connection state is ${this.peer.connectionState}`
                 }
             })
+
+            this.eventTarget.dispatchEvent(customEvent)
+        } else if (this.peer.connectionState == "disconnected") {
+            // Transient state on mobile — log but don't show error modal
+            this.debugLog("Connection temporarily disconnected, waiting for recovery...")
+        } else if (this.peer.connectionState == "connected") {
+            // Connection recovered — dismiss any error modal
+            const customEvent: InfoEvent = new CustomEvent("stream-info", {
+                detail: {
+                    type: "connectionRecovered"
+                }
+            }) as any
 
             this.eventTarget.dispatchEvent(customEvent)
         }

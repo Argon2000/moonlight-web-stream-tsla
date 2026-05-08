@@ -3,6 +3,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    thread,
     time::Duration,
 };
 
@@ -116,7 +117,11 @@ impl TrackSampleVideoDecoder {
         sender: &mut TrackLocalSender<SequencedTrackLocalStaticRTP>,
         payloader: &mut impl Payloader,
         timestamp: u32,
+        frame_interval: Duration,
     ) {
+        // Collect all RTP packets for this frame first
+        let mut all_packets: Vec<Packet> = Vec::new();
+
         let mut peekable = samples.drain(..).peekable();
         while let Some(sample) = peekable.next() {
             let packets = match packetize(
@@ -134,8 +139,30 @@ impl TrackSampleVideoDecoder {
                 }
             };
 
-            for packet in packets {
-                sender.blocking_send_sample(packet);
+            all_packets.extend(packets);
+        }
+
+        let packet_count = all_packets.len();
+
+        // Pacing: spread packets over ~75% of the actual frame interval to avoid
+        // bursting that causes bufferbloat on cellular networks.
+        // Only pace if we have enough packets to matter (>4 packets).
+        // Cap pacing budget at 12.5ms to avoid excessive latency on low-fps frames.
+        let pacing_interval = if packet_count > 4 && !frame_interval.is_zero() {
+            let frame_time_us = frame_interval.as_micros() as u64;
+            // Use 75% of frame time, capped at 12.5ms (equivalent to 80fps floor)
+            let pacing_budget_us = (frame_time_us * 3 / 4).min(12_500);
+            Duration::from_micros(pacing_budget_us / (packet_count as u64 - 1))
+        } else {
+            Duration::ZERO
+        };
+
+        for (i, packet) in all_packets.into_iter().enumerate() {
+            sender.blocking_send_sample(packet);
+
+            // Sleep between packets (skip after last packet)
+            if !pacing_interval.is_zero() && i < packet_count - 1 {
+                thread::sleep(pacing_interval);
             }
         }
     }
@@ -237,6 +264,20 @@ impl VideoDecoder for TrackSampleVideoDecoder {
     fn submit_decode_unit(&mut self, unit: VideoDecodeUnit<'_>) -> DecodeResult {
         let timestamp = (unit.presentation_time.as_secs_f64() * self.clock_rate as f64) as u32;
 
+        // Compute actual frame interval from consecutive presentation timestamps.
+        // This adapts to real encoder output (e.g., 34fps on still images, 120fps if configured).
+        // Falls back to configured FPS for the first frame.
+        let frame_interval = if self.old_presentation_time.is_zero() {
+            let fps = self.sender.stream.settings.fps;
+            if fps > 0 {
+                Duration::from_micros(1_000_000 / fps as u64)
+            } else {
+                Duration::ZERO
+            }
+        } else {
+            unit.presentation_time.saturating_sub(self.old_presentation_time)
+        };
+
         let total_len = unit.buffers.iter().map(|b| b.data.len()).sum();
         let mut full_frame = Vec::with_capacity(total_len);
         for buffer in unit.buffers {
@@ -257,7 +298,7 @@ impl VideoDecoder for TrackSampleVideoDecoder {
                     self.samples.push(data);
                 }
 
-                Self::send_single_frame(&mut self.samples, &mut self.sender, payloader, timestamp);
+                Self::send_single_frame(&mut self.samples, &mut self.sender, payloader, timestamp, frame_interval);
             }
             // -- H265
             Some(VideoCodec::H265 {
@@ -271,7 +312,7 @@ impl VideoDecoder for TrackSampleVideoDecoder {
                     self.samples.push(data);
                 }
 
-                Self::send_single_frame(&mut self.samples, &mut self.sender, payloader, timestamp);
+                Self::send_single_frame(&mut self.samples, &mut self.sender, payloader, timestamp, frame_interval);
             }
             // -- AV1
             Some(VideoCodec::Av1 { annex_b, payloader }) => {
@@ -282,7 +323,7 @@ impl VideoDecoder for TrackSampleVideoDecoder {
                     self.samples.push(data);
                 }
 
-                Self::send_single_frame(&mut self.samples, &mut self.sender, payloader, timestamp);
+                Self::send_single_frame(&mut self.samples, &mut self.sender, payloader, timestamp, frame_interval);
             }
             None => {
                 // this shouldn't happen

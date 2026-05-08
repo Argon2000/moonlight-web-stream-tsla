@@ -789,6 +789,11 @@ class ConnectionInfoModal implements Modal<void> {
             this.debugLog(text)
             this.debugDetailRetryButton.style.display = "inline-block"
             showModal(this)
+        } else if (data.type == "connectionRecovered") {
+            this.debugLog("Connection recovered")
+            this.debugDetailRetryButton.style.display = "none"
+            // Resolve the modal's onFinish promise to auto-dismiss
+            this.eventTarget.dispatchEvent(new Event("ml-connected"))
         }
     }
 
