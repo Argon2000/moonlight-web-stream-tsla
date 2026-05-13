@@ -632,6 +632,14 @@ canvas.video-stream {
     grid-template-columns: 50% 50%;
 }
 
+.sidebar-build-tag {
+    margin-top: 6px;
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.7);
+    word-break: break-all;
+}
+
 .hiddeninput {
     position: absolute;
     z-index: -1000;

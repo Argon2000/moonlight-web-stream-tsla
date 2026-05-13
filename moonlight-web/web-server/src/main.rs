@@ -6,7 +6,11 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader, stdin},
 };
 
-use actix_web::{App, HttpServer, web::Data};
+use actix_web::{
+    App, HttpServer,
+    middleware::DefaultHeaders,
+    web::Data,
+};
 use log::{LevelFilter, info};
 use serde::{Serialize, de::DeserializeOwned};
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
@@ -78,6 +82,12 @@ async fn main2() -> Result<(), anyhow::Error> {
 
         move || {
             App::new()
+                .wrap(
+                    DefaultHeaders::new()
+                        .add(("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"))
+                        .add(("Pragma", "no-cache"))
+                        .add(("Expires", "0")),
+                )
                 .app_data(config.clone())
                 .app_data(credentials.clone())
                 .service(api_service(data.clone()))

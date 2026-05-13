@@ -14,6 +14,16 @@ import { ScreenKeyboard, TextEvent } from "./screen_keyboard.js";
 import { FormModal } from "./component/modal/form.js";
 import { StreamStatsOverlay } from "./component/stream_stats.js";
 
+function getBuildVersionTag(): string {
+    try {
+        const url = new URL(import.meta.url)
+        const version = url.searchParams.get("v")
+        return version ?? "dev"
+    } catch {
+        return "unknown"
+    }
+}
+
 async function startApp() {
     const api = await getApi()
 
@@ -814,6 +824,7 @@ class ConnectionInfoModal implements Modal<void> {
 
 class ViewerSidebar implements Component, Sidebar {
     private app: ViewerApp
+    private buildTag = getBuildVersionTag()
 
     private div = document.createElement("div")
 

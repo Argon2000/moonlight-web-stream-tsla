@@ -1,5 +1,13 @@
 use actix_files::Files;
-use actix_web::{HttpResponse, dev::HttpServiceFactory, get, services, web::Data};
+use actix_web::{
+    HttpResponse,
+    dev::HttpServiceFactory,
+    get,
+    middleware::DefaultHeaders,
+    services,
+    web,
+    web::Data,
+};
 use common::{api_bindings::ConfigJs, config::Config};
 use log::warn;
 
@@ -12,9 +20,14 @@ pub fn web_service() -> impl HttpServiceFactory {
     #[cfg(not(debug_assertions))]
     let files = Files::new("/", "static").index_file("index.html");
 
-    files
-        .use_etag(true)
-        .use_last_modified(true)
+    web::scope("")
+        .wrap(
+            DefaultHeaders::new()
+                .add(("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"))
+                .add(("Pragma", "no-cache"))
+                .add(("Expires", "0")),
+        )
+        .service(files.use_etag(false).use_last_modified(false))
 }
 
 pub fn web_config_js_service() -> impl HttpServiceFactory {
