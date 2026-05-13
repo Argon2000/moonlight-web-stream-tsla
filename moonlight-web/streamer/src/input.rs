@@ -94,6 +94,8 @@ impl StreamInput {
                     Self::on_controller_input_message(id, message, &connection).await;
                 })
             }));
+
+            return true;
         }
 
         false
@@ -281,7 +283,7 @@ impl StreamInput {
             let mut raw_buffer = [0u8; 6];
             let mut buffer = ByteBuffer::new(&mut raw_buffer);
 
-            buffer.put_u8(0);
+            buffer.put_u8(1);
             buffer.put_u8(controller_number);
             buffer.put_u16(left_trigger_motor);
             buffer.put_u16(right_trigger_motor);

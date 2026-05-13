@@ -46,7 +46,7 @@ export function defaultStreamInputConfig(): StreamInputConfig {
     return {
         mouseMode: "follow",
         mouseScrollMode: "highres",
-        touchMode: "pointAndDrag",
+        touchMode: "touch",
         controllerConfig: {
             invertAB: false,
             invertXY: false
@@ -101,7 +101,7 @@ export class StreamInput {
             this.mouseRelative?.close()
             this.touch?.close()
             this.controllers?.close()
-            for (const controller of this.controllerInputs.splice(this.controllerInputs.length)) {
+            for (const controller of this.controllerInputs.splice(0, this.controllerInputs.length)) {
                 controller?.close()
             }
         }
@@ -684,10 +684,6 @@ export class StreamInput {
             try {
                 const gamepad = gamepads[gamepadIndex]
                 if (!gamepad) {
-                    continue
-                }
-
-                if (gamepad.mapping != "standard") {
                     continue
                 }
 
