@@ -23,6 +23,28 @@ export type InfoEvent = CustomEvent<
 >
 export type InfoEventListener = (event: InfoEvent) => void
 
+export type StreamAudioDiagnostics = {
+    decoderReady: boolean
+    audioContextState: string
+    receivedPackets: number
+    decodedPackets: number
+    receivedBytes: number
+    decodeErrors: number
+    underruns: number
+    resyncs: number
+    droppedBufferedSources: number
+    droppedLatencyFlushes: number
+    droppedCleanupSources: number
+    queuedSources: number
+    bufferLeadMs: number
+    lastPacketGapMs: number
+    avgPacketGapMs: number
+    maxPacketGapMs: number
+    latePacketGaps: number
+    currentTime: number
+    nextAudioTime: number
+}
+
 export function getStreamerSize(settings: StreamSettings, viewerScreenSize: [number, number]): [number, number] {
     let width, height
     if (settings.videoSize == "720p") {
@@ -72,6 +94,20 @@ export class Stream {
     private nextAudioTime: number = 0
     private sourceNodes: Set<AudioBufferSourceNode> = new Set()
     private isFirstAudioPacket: boolean = true
+    private audioPacketsReceived: number = 0
+    private audioPacketsDecoded: number = 0
+    private audioBytesReceived: number = 0
+    private audioDecodeErrors: number = 0
+    private audioUnderruns: number = 0
+    private audioResyncs: number = 0
+    private audioDroppedBufferedSources: number = 0
+    private audioDroppedLatencyFlushes: number = 0
+    private audioDroppedCleanupSources: number = 0
+    private lastAudioPacketAt: number = 0
+    private audioLastPacketGapMs: number = 0
+    private audioAvgPacketGapMs: number = 0
+    private audioMaxPacketGapMs: number = 0
+    private audioLatePacketGaps: number = 0
 
     constructor(api: Api, hostId: number, appId: number, settings: StreamSettings, supportedVideoFormats: VideoCodecSupport, viewerScreenSize: [number, number]) {
         this.api = api
@@ -217,6 +253,7 @@ export class Stream {
         }
 
         const currentTime = this.audioContext.currentTime;
+        this.audioPacketsDecoded++;
         
         if (this.isFirstAudioPacket) {
             // Larger initial buffer to allow smooth scheduling and avoid early underruns
@@ -226,19 +263,22 @@ export class Stream {
 
         let ahead = this.nextAudioTime - currentTime;
 
-        // Latency Control (reset if too far behind or ahead)
-        const MAX_LATENCY = 0.15; // 150ms — tighter for lower perceived latency
-        if (ahead > MAX_LATENCY) {
-            for (const node of this.sourceNodes) {
-                try { node.stop(); } catch(e) {}
-            }
-            this.sourceNodes.clear();
-            this.nextAudioTime = currentTime + 0.04;
-            ahead = this.nextAudioTime - currentTime;
+        // Latency control with two thresholds:
+        // 1) Soft overrun: keep audio continuous and gently catch up by slightly
+        //    increasing playback rate for this chunk.
+        // 2) Hard overrun: drop only this newly decoded chunk as last resort.
+        const SOFT_OVERRUN = 0.15; // 150ms
+        const HARD_OVERRUN = 0.30; // 300ms
+        if (ahead > HARD_OVERRUN) {
+            this.audioDroppedBufferedSources++;
+            this.audioDroppedLatencyFlushes++;
+            return;
         }
 
         if (ahead < -0.02) {
              // We are behind (underrun), resync with a small buffer
+             this.audioUnderruns++;
+             this.audioResyncs++;
              this.nextAudioTime = currentTime + 0.04;
         }
 
@@ -252,6 +292,14 @@ export class Stream {
         const source = this.audioContext.createBufferSource();
         source.buffer = audioBuffer;
 
+        // Soft catch-up: slightly faster playback drains buffered lead without
+        // abrupt flushes that can produce static/pops.
+        if (ahead > SOFT_OVERRUN) {
+            // Scale 1.0 -> 1.06 between SOFT_OVERRUN and HARD_OVERRUN
+            const t = Math.min(1, (ahead - SOFT_OVERRUN) / (HARD_OVERRUN - SOFT_OVERRUN));
+            source.playbackRate.value = 1.0 + (0.06 * t);
+        }
+
         if (this.mainGainNode) {
             source.connect(this.mainGainNode);
         } else {
@@ -259,7 +307,7 @@ export class Stream {
         }
         
         source.start(this.nextAudioTime);
-        this.nextAudioTime += audioBuffer.duration;
+        this.nextAudioTime += audioBuffer.duration / source.playbackRate.value;
         
         this.sourceNodes.add(source);
         source.onended = () => {
@@ -272,6 +320,8 @@ export class Stream {
                 if (staleNode !== source) {
                     try { staleNode.stop(); } catch(e) {}
                     this.sourceNodes.delete(staleNode);
+                    this.audioDroppedBufferedSources++;
+                    this.audioDroppedCleanupSources++;
                 }
             }
         }
@@ -601,10 +651,31 @@ export class Stream {
 
     private onAudioDataChannelMessage(event: MessageEvent) {
         if (!this.audioDecoder || !this.audioDecoderReady) return;
+        this.audioPacketsReceived++;
+        if (event.data && event.data.byteLength) {
+            this.audioBytesReceived += event.data.byteLength;
+        }
+
+        const now = performance.now();
+        if (this.lastAudioPacketAt > 0) {
+            const gapMs = now - this.lastAudioPacketAt;
+            this.audioLastPacketGapMs = gapMs;
+            this.audioMaxPacketGapMs = Math.max(this.audioMaxPacketGapMs, gapMs);
+            if (this.audioAvgPacketGapMs === 0) {
+                this.audioAvgPacketGapMs = gapMs;
+            } else {
+                this.audioAvgPacketGapMs = (this.audioAvgPacketGapMs * 0.9) + (gapMs * 0.1);
+            }
+            if (gapMs > 35) {
+                this.audioLatePacketGaps++;
+            }
+        }
+        this.lastAudioPacketAt = now;
         
         try {
             this.audioDecoder.decode(new Uint8Array(event.data));
         } catch (e) {
+            this.audioDecodeErrors++;
             console.error("Error decoding audio", e);
         }
     }
@@ -676,6 +747,31 @@ export class Stream {
 
     getPeer(): RTCPeerConnection | null {
         return this.peer
+    }
+
+    getAudioDiagnostics(): StreamAudioDiagnostics {
+        const currentTime = this.audioContext?.currentTime ?? 0
+        return {
+            decoderReady: this.audioDecoderReady,
+            audioContextState: this.audioContext?.state ?? "missing",
+            receivedPackets: this.audioPacketsReceived,
+            decodedPackets: this.audioPacketsDecoded,
+            receivedBytes: this.audioBytesReceived,
+            decodeErrors: this.audioDecodeErrors,
+            underruns: this.audioUnderruns,
+            resyncs: this.audioResyncs,
+            droppedBufferedSources: this.audioDroppedBufferedSources,
+            droppedLatencyFlushes: this.audioDroppedLatencyFlushes,
+            droppedCleanupSources: this.audioDroppedCleanupSources,
+            queuedSources: this.sourceNodes.size,
+            bufferLeadMs: Math.max(0, (this.nextAudioTime - currentTime) * 1000),
+            lastPacketGapMs: this.audioLastPacketGapMs,
+            avgPacketGapMs: this.audioAvgPacketGapMs,
+            maxPacketGapMs: this.audioMaxPacketGapMs,
+            latePacketGaps: this.audioLatePacketGaps,
+            currentTime,
+            nextAudioTime: this.nextAudioTime,
+        }
     }
 
     getStreamerSize(): [number, number] {

@@ -221,6 +221,7 @@ class ViewerApp implements Component {
 
         // Wire stats overlay to WebRTC peer (lazily resolved since peer is created async)
         this.statsOverlay.setPeerGetter(() => this.stream?.getPeer() ?? null)
+        this.statsOverlay.setStreamGetter(() => this.stream)
         if (settings.showStreamStats) {
             this.statsOverlay.show()
         }
