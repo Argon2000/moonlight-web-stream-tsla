@@ -29,11 +29,11 @@ export type StreamSettings = {
 export function defaultStreamSettings(): StreamSettings {
     return {
         sidebarEdge: "left",
-        bitrate: 3000,
+        bitrate: 8000,
         packetSize: 1024,
         fps: 60,
-        videoSampleQueueSize: 2,
-        videoSize: "720p",
+        videoSampleQueueSize: 1,
+        videoSize: "1440p",
         videoSizeCustom: {
             width: 960,
             height: 540,
@@ -41,7 +41,7 @@ export function defaultStreamSettings(): StreamSettings {
         dontForceH264: false,
         canvasRenderer: true,
         playAudioLocal: false,
-        audioSampleQueueSize: 6,
+        audioSampleQueueSize: 1,
         mouseScrollMode: "normal",
         controllerConfig: {
             invertAB: false,
