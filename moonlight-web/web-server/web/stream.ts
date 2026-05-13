@@ -10,6 +10,7 @@ import { SelectComponent } from "./component/input.js";
 import { getStandardVideoFormats, getSupportedVideoFormats } from "./stream/video.js";
 import { CanvasRenderer } from "./stream/canvas.js";
 import { StreamCapabilities, StreamKeys } from "./api_bindings.js";
+import { getTeslaVirtualSwapOverride, setTeslaVirtualSwapOverride } from "./stream/gamepad.js";
 import { ScreenKeyboard, TextEvent } from "./screen_keyboard.js";
 import { FormModal } from "./component/modal/form.js";
 import { StreamStatsOverlay } from "./component/stream_stats.js";
@@ -342,6 +343,10 @@ class ViewerApp implements Component {
         Object.assign(this.inputConfig, config)
 
         this.stream?.getInput().setConfig(this.inputConfig)
+    }
+
+    getStreamInput() {
+        return this.stream?.getInput() ?? null
     }
 
     // Keyboard
@@ -903,6 +908,65 @@ class ViewerSidebar implements Component, Sidebar {
             this.app.toggleStats()
         })
         this.buttonDiv.appendChild(statsButton)
+
+        const debugGamepadsButton = document.createElement("button")
+        debugGamepadsButton.innerText = "Debug Gamepads"
+        debugGamepadsButton.addEventListener("click", async () => {
+            const gamepads = navigator.getGamepads()
+            const lines: string[] = []
+
+            lines.push(`Build: ${this.buildTag}`)
+            lines.push(`Detected gamepad slots: ${gamepads.length}`)
+
+            for (let i = 0; i < gamepads.length; i++) {
+                const gp = gamepads[i]
+                if (!gp) {
+                    lines.push(`[${i}] empty`)
+                    continue
+                }
+
+                lines.push(`[${i}] index=${gp.index} connected=${gp.connected} mapping=${gp.mapping}`)
+                lines.push(`    id=${gp.id}`)
+                lines.push(`    buttons=${gp.buttons.length} axes=${gp.axes.length} ts=${gp.timestamp}`)
+            }
+
+            // Add debug logs from StreamInput
+            const streamInput = this.app.getStreamInput()
+            if (streamInput) {
+                lines.push("")
+                lines.push("=== Input Debug Logs ===")
+                const debugLogs = streamInput.getDebugLogs()
+                debugLogs.forEach(log => lines.push(log))
+            }
+
+            await showMessage(lines.join("\n"))
+        })
+        this.buttonDiv.appendChild(debugGamepadsButton)
+
+        const teslaSwapButton = document.createElement("button")
+        const updateTeslaSwapLabel = () => {
+            const state = getTeslaVirtualSwapOverride()
+            const stateLabel = state === null ? "Auto" : (state ? "On" : "Off")
+            teslaSwapButton.innerText = `Tesla ABXY: ${stateLabel}`
+        }
+        updateTeslaSwapLabel()
+        teslaSwapButton.addEventListener("click", async () => {
+            const current = getTeslaVirtualSwapOverride()
+            const next = current === null ? true : (current === true ? false : null)
+            setTeslaVirtualSwapOverride(next)
+            updateTeslaSwapLabel()
+
+            const explain = next === null
+                ? "Auto mode (ID-based detection)"
+                : (next ? "Forced ON: swap Tesla virtual ABXY" : "Forced OFF: no Tesla virtual ABXY swap")
+            await showMessage(`Tesla ABXY override changed to ${teslaSwapButton.innerText}.\n${explain}`)
+        })
+        this.buttonDiv.appendChild(teslaSwapButton)
+
+        const buildInfo = document.createElement("div")
+        buildInfo.classList.add("sidebar-build-tag")
+        buildInfo.innerText = `Build: ${this.buildTag}`
+        this.div.appendChild(buildInfo)
 
 
         // Select Mouse Mode

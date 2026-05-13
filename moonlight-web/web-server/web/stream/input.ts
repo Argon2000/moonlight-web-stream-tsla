@@ -82,6 +82,10 @@ export class StreamInput {
     private previousStates: { [internalId: number]: GamepadState } = {}
     private scratchState: GamepadState = { buttonFlags: 0, leftTrigger: 0, rightTrigger: 0, leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0 }
 
+    // Debug logging
+    private debugLogs: Array<{ time: number; message: string }> = []
+    private maxDebugLogs = 100
+
     constructor(config?: StreamInputConfig, peer?: RTCPeerConnection,) {
         if (peer) {
             this.setPeer(peer)
@@ -140,6 +144,19 @@ export class StreamInput {
 
     getCapabilities(): StreamCapabilities {
         return this.capabilities
+    }
+
+    private addDebugLog(message: string) {
+        const now = performance.now()
+        this.debugLogs.push({ time: now, message })
+        if (this.debugLogs.length > this.maxDebugLogs) {
+            this.debugLogs.shift()
+        }
+        console.log(`[DebugLog] ${message}`)
+    }
+
+    getDebugLogs(): Array<string> {
+        return this.debugLogs.map((log, i) => `${(log.time / 1000).toFixed(2)}s [${i}] ${log.message}`)
     }
 
     // -- External Event Listeners
@@ -575,9 +592,11 @@ export class StreamInput {
     private bufferedControllers: Array<number> = []
     private registerBufferedControllers() {
         const gamepads = navigator.getGamepads()
+        this.addDebugLog(`registerBufferedControllers called with ${this.bufferedControllers.length} buffered controllers`)
 
         for (const index of this.bufferedControllers.splice(0)) {
             const gamepad = gamepads[index]
+            this.addDebugLog(`Attempting to register buffered controller at index ${index}: ${gamepad ? gamepad.id : 'NOT FOUND'}`)
             if (gamepad) {
                 this.onGamepadConnect(gamepad)
             }
@@ -596,25 +615,44 @@ export class StreamInput {
         return actuators
     }
 
-    private gamepads: Map<number, number> = new Map() // Maps gamepad.index to our internal ID
+    private gamepads: Map<number, { internalId: number; gamepadId: string; vendorId: string | null; isVirtual: boolean }> = new Map() // Maps gamepad.index to metadata
+    private pendingGamepads: Map<number, { gamepadId: string; vendorId: string | null; isVirtual: boolean; connectedAt: number }> = new Map()
     private gamepadRumbleInterval: number | null = null
 
-    onGamepadConnect(gamepad: Gamepad) {
-        if (!this.connected) {
-            this.bufferedControllers.push(gamepad.index)
+    private getGamepadVendorId(gamepadOrId: Gamepad | string): string | null {
+        const id = typeof gamepadOrId === "string" ? gamepadOrId : (gamepadOrId.id || "")
+        const match = /VENDOR\s*:?\s*([0-9A-F]{4})/i.exec(id)
+        return match ? match[1].toUpperCase() : null
+    }
+
+    private isVirtualGamepad(gamepadOrId: Gamepad | string): boolean {
+        const id = typeof gamepadOrId === "string" ? gamepadOrId : (gamepadOrId.id || "")
+        return /TESLA\s+VIRTUAL\s+GAMEPAD/i.test(id)
+    }
+
+    private removeRegisteredGamepad(index: number, reason: string) {
+        const entry = this.gamepads.get(index)
+        if (!entry) {
             return
         }
 
-        if (this.gamepads.has(gamepad.index)) {
-            return
+        this.addDebugLog(`${reason}: "${entry.gamepadId}" at index ${index} (internal ID ${entry.internalId})`)
+        this.sendControllerRemove(entry.internalId)
+        this.gamepads.delete(index)
+        delete this.previousStates[entry.internalId]
+        if (this.controllerInputs[entry.internalId]) {
+            this.controllerInputs[entry.internalId]?.close()
+            this.controllerInputs[entry.internalId] = null
         }
+    }
 
+    private registerGamepad(gamepad: Gamepad, vendorId: string | null, isVirtual: boolean) {
         // Find the lowest available internal ID
         let id = 0
         while (true) {
             let inUse = false
-            for (const existingId of this.gamepads.values()) {
-                if (existingId === id) {
+            for (const entry of this.gamepads.values()) {
+                if (entry.internalId === id) {
                     inUse = true
                     break
                 }
@@ -622,24 +660,21 @@ export class StreamInput {
             if (!inUse) break
             id++
         }
-        
-        this.gamepads.set(gamepad.index, id)
 
-        // Start Rumble interval
+        this.gamepads.set(gamepad.index, { internalId: id, gamepadId: gamepad.id, vendorId, isVirtual })
+        this.pendingGamepads.delete(gamepad.index)
+        this.addDebugLog(`Connected "${gamepad.id}" at index ${gamepad.index} with internal ID ${id}, total: ${this.gamepads.size}, map keys: ${Array.from(this.gamepads.keys()).join(', ')}`)
+
         if (this.gamepadRumbleInterval == null) {
             this.gamepadRumbleInterval = window.setInterval(this.onGamepadRumbleInterval.bind(this), CONTROLLER_RUMBLE_INTERVAL_MS - 10)
         }
 
-        // Initialize rumble state for the new controller using its assigned internal ID
         this.gamepadRumbleCurrent[id] = { lowFrequencyMotor: 0, highFrequencyMotor: 0, leftTrigger: 0, rightTrigger: 0 }
 
         let capabilities = 0
-
-        // Rumble capabilities
         for (const actuator of this.collectActuators(gamepad)) {
             if ("effects" in actuator) {
                 const supportedEffects = actuator.effects as Array<string>
-
                 for (const effect of supportedEffects) {
                     if (effect == "dual-rumble") {
                         capabilities = StreamControllerCapabilities.CAPABILITY_RUMBLE
@@ -650,7 +685,6 @@ export class StreamInput {
             } else if ("type" in actuator && (actuator.type == "vibration" || actuator.type == "dual-rumble")) {
                 capabilities = StreamControllerCapabilities.CAPABILITY_RUMBLE
             } else if ("playEffect" in actuator && typeof actuator.playEffect == "function") {
-                // we're just hoping at this point
                 capabilities = StreamControllerCapabilities.CAPABILITY_RUMBLE | StreamControllerCapabilities.CAPABILITY_TRIGGER_RUMBLE
             } else if ("pulse" in actuator && typeof actuator.pulse == "function") {
                 capabilities = StreamControllerCapabilities.CAPABILITY_RUMBLE
@@ -663,43 +697,231 @@ export class StreamInput {
             console.warn(`[Gamepad]: Unable to read values of gamepad with mapping ${gamepad.mapping}`)
         }
     }
-    onGamepadDisconnect(event: GamepadEvent) {
-        const internalId = this.gamepads.get(event.gamepad.index)
-        if (internalId != undefined) {
-            this.sendControllerRemove(internalId)
-            this.gamepads.delete(event.gamepad.index)
 
-            // Close and clear the channel to ensure we create a new one on reconnect
-            // in case the host closed it or it's in a bad state.
-            if (this.controllerInputs[internalId]) {
-                this.controllerInputs[internalId]?.close()
-                this.controllerInputs[internalId] = null
+    private processPendingGamepads(gamepads: ArrayLike<Gamepad | null>) {
+        if (this.pendingGamepads.size === 0) {
+            return
+        }
+
+        // Collect current registered controller state signatures for mirror detection
+        const registeredSignatures = new Set<string>()
+        for (const [index, entry] of this.gamepads.entries()) {
+            const gp = gamepads[index]
+            if (gp) {
+                const state = extractGamepadState(gp, this.config.controllerConfig, this.scratchState)
+                if (!this.isNeutralGamepadState(state)) {
+                    registeredSignatures.add(this.buildGamepadStateSignature(state))
+                }
             }
+        }
+
+        const activePending: Array<{ index: number; gamepad: Gamepad; vendorId: string | null; isVirtual: boolean; state: GamepadState }> = []
+
+        for (const [index, pending] of this.pendingGamepads.entries()) {
+            const gamepad = gamepads[index] ?? null
+            if (!gamepad || gamepad.id !== pending.gamepadId) {
+                continue // Gamepad gone or identity changed at this index
+            }
+
+            const state = extractGamepadState(gamepad, this.config.controllerConfig, this.scratchState)
+            if (this.isNeutralGamepadState(state)) {
+                continue
+            }
+
+            // Skip if this state mirrors an already-registered controller
+            const sig = this.buildGamepadStateSignature(state)
+            if (registeredSignatures.has(sig)) {
+                continue
+            }
+
+            activePending.push({
+                index,
+                gamepad,
+                vendorId: pending.vendorId,
+                isVirtual: pending.isVirtual,
+                state: { ...state }
+            })
+        }
+
+        if (activePending.length === 0) {
+            return
+        }
+
+        // Group by state signature to detect mirrors among pending controllers.
+        // Tesla mirrors input to all connected controllers, so multiple pending
+        // controllers with the same state in the same frame are mirrors.
+        // Only promote one per unique state (prefer physical over virtual).
+        const promotedSignatures = new Set<string>()
+        activePending.sort((a, b) => Number(a.isVirtual) - Number(b.isVirtual))
+        for (const candidate of activePending) {
+            const sig = this.buildGamepadStateSignature(candidate.state)
+            if (promotedSignatures.has(sig)) {
+                this.addDebugLog(`Skipping mirrored pending controller: "${candidate.gamepad.id}" at index ${candidate.index} (same state as already promoted)`)
+                continue // Keep in pending - may produce independent input later
+            }
+
+            this.registerGamepad(candidate.gamepad, candidate.vendorId, candidate.isVirtual)
+            promotedSignatures.add(sig)
+        }
+    }
+
+    onGamepadConnect(gamepad: Gamepad) {
+        if (!this.connected) {
+            this.bufferedControllers.push(gamepad.index)
+            this.addDebugLog(`Buffering gamepad at index ${gamepad.index}: ${gamepad.id}`)
+            return
+        }
+
+        // Use gamepad.index as unique key (gamepad.id is NOT unique on Tesla)
+        if (this.gamepads.has(gamepad.index)) {
+            // Already registered at this index, just verify identity
+            const entry = this.gamepads.get(gamepad.index)!
+            this.addDebugLog(`Gamepad index ${gamepad.index} already registered ("${entry.gamepadId}" internal ID ${entry.internalId}), got "${gamepad.id}"`)
+            return
+        }
+
+        if (this.pendingGamepads.has(gamepad.index)) {
+            this.addDebugLog(`Gamepad index ${gamepad.index} already pending, got "${gamepad.id}"`)
+            return
+        }
+
+        const vendorId = this.getGamepadVendorId(gamepad)
+        const isVirtual = this.isVirtualGamepad(gamepad)
+        this.pendingGamepads.set(gamepad.index, {
+            gamepadId: gamepad.id,
+            vendorId,
+            isVirtual,
+            connectedAt: performance.now()
+        })
+        this.addDebugLog(`Queued gamepad pending activation at index ${gamepad.index}: ${gamepad.id}`)
+    }
+    onGamepadDisconnect(event: GamepadEvent) {
+        const index = event.gamepad.index
+        if (this.pendingGamepads.has(index)) {
+            this.addDebugLog(`Dropped pending gamepad on disconnect at index ${index}: ${event.gamepad.id}`)
+            this.pendingGamepads.delete(index)
+            return
+        }
+        if (this.gamepads.has(index)) {
+            this.removeRegisteredGamepad(index, `Disconnected`)
         }
     }
     onGamepadUpdate() {
-        if (this.gamepads.size === 0) return
         const gamepads = navigator.getGamepads()
-        for (const [gamepadIndex, internalId] of this.gamepads.entries()) {
+        this.processPendingGamepads(gamepads)
+        if (this.gamepads.size === 0) return
+        const pendingUpdates: Array<{
+            internalId: number
+            gamepadId: string
+            timestamp: number
+            state: GamepadState
+        }> = []
+        
+        if (this.gamepads.size === 0) return
+        
+        for (const [index, entry] of this.gamepads.entries()) {
             try {
-                const gamepad = gamepads[gamepadIndex]
-                if (!gamepad) {
-                    continue
-                }
+                const gamepad = gamepads[index]
+                
+                // Verify the gamepad is still the same device by checking ID
+                if (!gamepad || gamepad.id !== entry.gamepadId) {
+                    // Index mismatch - browser may have reshuffled, find correct index
+                    let foundAt = -1
+                    for (let i = 0; i < gamepads.length; i++) {
+                        if (gamepads[i] && gamepads[i]?.id === entry.gamepadId) {
+                            foundAt = i
+                            break
+                        }
+                    }
+                    if (foundAt === -1) {
+                        continue
+                    }
+                    this.addDebugLog(`Found "${entry.gamepadId}" at index ${foundAt}, re-keying`)
+                    // Re-key the entry to the new index
+                    this.gamepads.delete(index)
+                    this.gamepads.set(foundAt, entry)
+                    const gamepad2 = gamepads[foundAt]
+                    if (!gamepad2) continue
 
-                const state = extractGamepadState(gamepad, this.config.controllerConfig, this.scratchState)
+                    const state = extractGamepadState(gamepad2, this.config.controllerConfig, this.scratchState)
 
-                if (!this.previousStates[internalId] || !this.areGamepadStatesEqual(this.previousStates[internalId], state)) {
-                    this.sendController(internalId, state)
-                    this.previousStates[internalId] = { ...state }
+                    if (!this.previousStates[entry.internalId] || !this.areGamepadStatesEqual(this.previousStates[entry.internalId], state)) {
+                        pendingUpdates.push({
+                            internalId: entry.internalId,
+                            gamepadId: entry.gamepadId,
+                            timestamp: gamepad2.timestamp ?? 0,
+                            state: { ...state }
+                        })
+                        this.previousStates[entry.internalId] = { ...state }
+                    }
+                } else {
+                    const state = extractGamepadState(gamepad, this.config.controllerConfig, this.scratchState)
+
+                    if (!this.previousStates[entry.internalId] || !this.areGamepadStatesEqual(this.previousStates[entry.internalId], state)) {
+                        pendingUpdates.push({
+                            internalId: entry.internalId,
+                            gamepadId: entry.gamepadId,
+                            timestamp: gamepad.timestamp ?? 0,
+                            state: { ...state }
+                        })
+                        this.previousStates[entry.internalId] = { ...state }
+                    }
                 }
             } catch (e) {
                 console.error("[Input]: Error processing gamepad update", e)
             }
         }
+
+        // Tesla browser can expose mirrored gamepads for one physical press.
+        // Prefer non-virtual pads and suppress mirrored virtual duplicates per poll.
+        pendingUpdates.sort((a, b) => Number(this.isTeslaVirtualGamepadId(a.gamepadId)) - Number(this.isTeslaVirtualGamepadId(b.gamepadId)))
+
+        const sentBySignature = new Map<string, { gamepadId: string; timestamp: number }>()
+        for (const update of pendingUpdates) {
+            let suppress = false
+            if (!this.isNeutralGamepadState(update.state)) {
+                const signature = this.buildGamepadStateSignature(update.state)
+                const previous = sentBySignature.get(signature)
+                if (previous) {
+                    const currentIsVirtual = this.isTeslaVirtualGamepadId(update.gamepadId)
+                    const previousIsVirtual = this.isTeslaVirtualGamepadId(previous.gamepadId)
+                    const closeInTime = Math.abs(previous.timestamp - update.timestamp) <= 4
+                    if (closeInTime && currentIsVirtual && !previousIsVirtual) {
+                        suppress = true
+                    }
+                }
+                if (!suppress) {
+                    sentBySignature.set(signature, { gamepadId: update.gamepadId, timestamp: update.timestamp })
+                }
+            }
+
+            if (!suppress) {
+                this.sendController(update.internalId, update.state)
+            }
+        }
     }
 
     private readonly EPSILON = 0.001 // Tolerans. Ändringar mindre än 0.1% ignoreras.
+
+    private isTeslaVirtualGamepadId(gamepadId: string): boolean {
+        return /TESLA\s+VIRTUAL\s+GAMEPAD/i.test(gamepadId)
+    }
+
+    private buildGamepadStateSignature(state: GamepadState): string {
+        // Quantize analog values to avoid noise while detecting mirrored states.
+        const q = (value: number) => Math.round(value * 1000)
+        return `${state.buttonFlags}|${q(state.leftTrigger)}|${q(state.rightTrigger)}|${q(state.leftStickX)}|${q(state.leftStickY)}|${q(state.rightStickX)}|${q(state.rightStickY)}`
+    }
+
+    private isNeutralGamepadState(state: GamepadState): boolean {
+        return state.buttonFlags === 0
+            && Math.abs(state.leftTrigger) < this.EPSILON
+            && Math.abs(state.rightTrigger) < this.EPSILON
+            && Math.abs(state.leftStickX) < this.EPSILON
+            && Math.abs(state.leftStickY) < this.EPSILON
+            && Math.abs(state.rightStickX) < this.EPSILON
+            && Math.abs(state.rightStickY) < this.EPSILON
+    }
 
     private areGamepadStatesEqual(state1: GamepadState, state2: GamepadState): boolean {
         if (state1.buttonFlags !== state2.buttonFlags) {
@@ -721,9 +943,9 @@ export class StreamInput {
     }
 
     private getGamepadIndex(internalId: number): number | undefined {
-        for (const [gamepadIndex, currentInternalId] of this.gamepads.entries()) {
-            if (currentInternalId === internalId) {
-                return gamepadIndex
+        for (const [index, entry] of this.gamepads.entries()) {
+            if (entry.internalId === internalId) {
+                return index
             }
         }
         return undefined
@@ -779,9 +1001,9 @@ export class StreamInput {
     }
 
     private onGamepadRumbleInterval() {
-        for (const [gamepadIndex, internalId] of this.gamepads.entries()) {
-            const rumble = this.gamepadRumbleCurrent[internalId]
-            const gamepad = navigator.getGamepads()[gamepadIndex]
+        for (const [index, entry] of this.gamepads.entries()) {
+            const rumble = this.gamepadRumbleCurrent[entry.internalId]
+            const gamepad = navigator.getGamepads()[index]
             if (gamepad && rumble) {
                 this.refreshGamepadRumble(rumble, gamepad)
             }

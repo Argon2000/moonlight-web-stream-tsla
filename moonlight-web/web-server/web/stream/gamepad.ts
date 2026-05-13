@@ -1,5 +1,33 @@
 import { StreamControllerButton } from "../api_bindings.js"
 
+const TESLA_SWAP_OVERRIDE_STORAGE_KEY = "mlTeslaVirtualSwapOverride"
+let teslaSwapOverride: boolean | null = null
+
+try {
+    const raw = localStorage.getItem(TESLA_SWAP_OVERRIDE_STORAGE_KEY)
+    if (raw === "on") teslaSwapOverride = true
+    else if (raw === "off") teslaSwapOverride = false
+} catch {
+    // Ignore localStorage errors in restricted environments.
+}
+
+export function getTeslaVirtualSwapOverride(): boolean | null {
+    return teslaSwapOverride
+}
+
+export function setTeslaVirtualSwapOverride(value: boolean | null) {
+    teslaSwapOverride = value
+    try {
+        if (value === null) {
+            localStorage.removeItem(TESLA_SWAP_OVERRIDE_STORAGE_KEY)
+        } else {
+            localStorage.setItem(TESLA_SWAP_OVERRIDE_STORAGE_KEY, value ? "on" : "off")
+        }
+    } catch {
+        // Ignore localStorage errors in restricted environments.
+    }
+}
+
 export type ControllerConfig = {
     invertXY: boolean
     invertAB: boolean
@@ -69,7 +97,20 @@ export function extractGamepadState(gamepad: Gamepad, config: ControllerConfig, 
     // mapping="standard", but maps buttons by LABEL not by POSITION.
     // Since Nintendo has A/B and X/Y in opposite positions vs Xbox,
     // we need to swap indices 0↔1 and 2↔3 to get position-based mapping.
-    const needsTeslaSwap = /TESLA/i.test(gamepad.id)
+    const id = gamepad.id || ""
+    const isTeslaVirtual = /TESLA\s+VIRTUAL\s+GAMEPAD/i.test(id)
+        || /vendor\s*[: ]?045e\s*.*product\s*[: ]?02d1/i.test(id)
+        || /vendor\s*[: ]?045a\s*.*product\s*[: ]?02d1/i.test(id)
+    // Important: Theatre mode can expose a Tesla virtual controller that already
+    // behaves with position-based layout. So we only apply the swap for the
+    // known problematic signature (vendor 045a / product 02d1), not for all
+    // Tesla virtual pads.
+    const detectedNeedsTeslaSwap = /vendor\s*[: ]?045a\s*.*product\s*[: ]?02d1/i.test(id)
+        || /standard\s*gamepad\s*vendor\s*045a\s*product\s*02d1/i.test(id)
+
+    const needsTeslaSwap = isTeslaVirtual && teslaSwapOverride !== null
+        ? teslaSwapOverride
+        : detectedNeedsTeslaSwap
 
     let buttonFlags = 0
     for (let buttonId = 0; buttonId < gamepad.buttons.length; buttonId++) {
