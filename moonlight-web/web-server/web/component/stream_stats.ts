@@ -1,11 +1,29 @@
 import { Stream, StreamAudioDiagnostics } from "../stream/index.js"
 import { Component } from "./index.js"
 
+type WorkerDiagnosticsSnapshot = {
+    stream: {
+        audioDecoderMode: "worker" | "main-thread" | "not-ready"
+        audioWorkerAttempted: boolean
+        audioWorkerActive: boolean
+        audioWorkerError: string | null
+    } | null
+    canvas: {
+        attempted: boolean
+        active: boolean
+        hasWorkerInstance: boolean
+        error: string | null
+    } | null
+    canvasRendererEnabled: boolean
+    workersAllowedBySettings: boolean
+}
+
 export class StreamStatsOverlay implements Component {
     private root = document.createElement("div")
     private intervalId: ReturnType<typeof setInterval> | null = null
     private peerGetter: (() => RTCPeerConnection | null) | null = null
     private streamGetter: (() => Stream | null) | null = null
+    private workerDiagnosticsGetter: (() => WorkerDiagnosticsSnapshot | null) | null = null
 
     // Cached DOM elements for fast updates (avoid querySelector each tick)
     private elVideoRes = document.createElement("span")
@@ -23,6 +41,8 @@ export class StreamStatsOverlay implements Component {
     private elAudioDropReason = document.createElement("span")
     private elAudioBuffer = document.createElement("span")
     private elAudioPipeline = document.createElement("span")
+    private elWorkerAudio = document.createElement("span")
+    private elWorkerVideo = document.createElement("span")
 
     // Previous snapshot for delta calculations
     private prevTimestamp = 0
@@ -53,6 +73,8 @@ export class StreamStatsOverlay implements Component {
             ["Audio Drops", this.elAudioDropReason],
             ["Audio Buffer", this.elAudioBuffer],
             ["Audio Pipeline", this.elAudioPipeline],
+            ["Worker Audio", this.elWorkerAudio],
+            ["Worker Video", this.elWorkerVideo],
         ]
 
         for (const [label, valueEl] of rows) {
@@ -78,6 +100,10 @@ export class StreamStatsOverlay implements Component {
 
     setStreamGetter(getter: () => Stream | null) {
         this.streamGetter = getter
+    }
+
+    setWorkerDiagnosticsGetter(getter: () => WorkerDiagnosticsSnapshot | null) {
+        this.workerDiagnosticsGetter = getter
     }
 
     show() {
@@ -207,6 +233,7 @@ export class StreamStatsOverlay implements Component {
 
         const stream = this.streamGetter?.()
         const audioDiag: StreamAudioDiagnostics | null = stream ? stream.getAudioDiagnostics() : null
+        const workerDiag = this.workerDiagnosticsGetter?.() ?? null
         if (audioDiag) {
             this.elAudioBuffer.textContent = `${audioDiag.bufferLeadMs.toFixed(1)} ms lead, ${audioDiag.queuedSources} queued, ctx=${audioDiag.audioContextState}`
             this.elAudioGap.textContent = `last ${audioDiag.lastPacketGapMs.toFixed(1)} ms, avg ${audioDiag.avgPacketGapMs.toFixed(1)} ms, max ${audioDiag.maxPacketGapMs.toFixed(1)} ms, late ${audioDiag.latePacketGaps}`
@@ -217,6 +244,27 @@ export class StreamStatsOverlay implements Component {
             this.elAudioDropReason.textContent = "—"
             this.elAudioBuffer.textContent = "—"
             this.elAudioPipeline.textContent = "—"
+        }
+
+        if (workerDiag) {
+            if (workerDiag.stream) {
+                this.elWorkerAudio.textContent = `mode=${workerDiag.stream.audioDecoderMode}, active=${workerDiag.stream.audioWorkerActive}, attempted=${workerDiag.stream.audioWorkerAttempted}, err=${workerDiag.stream.audioWorkerError ?? "none"}`
+            } else {
+                this.elWorkerAudio.textContent = "unavailable"
+            }
+
+            if (workerDiag.canvasRendererEnabled) {
+                if (workerDiag.canvas) {
+                    this.elWorkerVideo.textContent = `active=${workerDiag.canvas.active}, attempted=${workerDiag.canvas.attempted}, instance=${workerDiag.canvas.hasWorkerInstance}, err=${workerDiag.canvas.error ?? "none"}`
+                } else {
+                    this.elWorkerVideo.textContent = "canvas diagnostics unavailable"
+                }
+            } else {
+                this.elWorkerVideo.textContent = "canvas renderer disabled"
+            }
+        } else {
+            this.elWorkerAudio.textContent = "—"
+            this.elWorkerVideo.textContent = "—"
         }
 
         // Save for next delta
@@ -233,6 +281,7 @@ export class StreamStatsOverlay implements Component {
         this.hide()
         this.peerGetter = null
         this.streamGetter = null
+        this.workerDiagnosticsGetter = null
     }
 
     mount(parent: HTMLElement): void {

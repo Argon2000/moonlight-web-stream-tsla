@@ -12,20 +12,35 @@ export class CanvasRenderer {
     frameReader: ReadableStreamDefaultReader | null
     latestFrame: VideoFrame | null
     isRunning: boolean = false
+    private renderWorker: Worker | null = null
+    private workerRenderingEnabled: boolean = false
+    private workerAccelerationAllowed: boolean
+    private workerInitAttempted: boolean = false
+    private workerInitError: string | null = null
     private stretchToFit: boolean
     private handleResize: () => void
-    constructor(canvasElement: HTMLCanvasElement, stretchToFit: boolean) {
+    constructor(canvasElement: HTMLCanvasElement, stretchToFit: boolean, enableWorkerAcceleration: boolean = true) {
         this.canvas = canvasElement
-        this.ctx = canvasElement.getContext("2d")
+        this.ctx = null
         this.videoTrack = null
         this.trackProcessor = null
         this.readableStream = null
         this.frameReader = null
         this.latestFrame = null
         this.stretchToFit = stretchToFit
+        this.workerAccelerationAllowed = enableWorkerAcceleration
         this.drawLoop = this.drawLoop.bind(this)
         this.handleResize = () => {
             if (!this.canvas) return
+            if (this.workerRenderingEnabled && this.renderWorker) {
+                this.renderWorker.postMessage({
+                    type: "resize",
+                    width: Math.max(1, this.canvas.clientWidth),
+                    height: Math.max(1, this.canvas.clientHeight),
+                })
+                return
+            }
+
             if (this.stretchToFit) {
                 this.canvas.width = this.canvas.clientWidth
                 this.canvas.height = this.canvas.clientHeight
@@ -40,6 +55,53 @@ export class CanvasRenderer {
             }
         }
         window.addEventListener("resize", this.handleResize)
+    }
+
+    private trySetupRenderWorker() {
+        this.workerInitAttempted = true
+
+        if (!this.workerAccelerationAllowed || this.renderWorker || this.workerRenderingEnabled || !this.canvas) {
+            return
+        }
+
+        const transfer = (this.canvas as any).transferControlToOffscreen
+        if (typeof Worker === "undefined" || typeof transfer !== "function") {
+            if (typeof Worker === "undefined") {
+                this.workerInitError = "Worker API unsupported"
+            } else {
+                this.workerInitError = "OffscreenCanvas transfer unsupported"
+            }
+            return
+        }
+
+        try {
+            const offscreen = transfer.call(this.canvas) as OffscreenCanvas
+            this.renderWorker = new Worker(new URL("./video_render_worker.js", import.meta.url), { type: "module" })
+            this.renderWorker.postMessage({
+                type: "init",
+                canvas: offscreen,
+                stretchToFit: this.stretchToFit,
+                width: Math.max(1, this.canvas.clientWidth),
+                height: Math.max(1, this.canvas.clientHeight),
+            }, [offscreen as any])
+            this.workerRenderingEnabled = true
+            this.workerInitError = null
+        } catch (e) {
+            console.error("Failed to initialize video render worker, falling back to main-thread canvas rendering", e)
+            this.renderWorker = null
+            this.workerRenderingEnabled = false
+            this.workerInitError = String(e)
+        }
+    }
+
+    getWorkerDiagnostics() {
+        return {
+            allowed: this.workerAccelerationAllowed,
+            attempted: this.workerInitAttempted,
+            active: this.workerRenderingEnabled,
+            hasWorkerInstance: this.renderWorker != null,
+            error: this.workerInitError,
+        }
     }
 
     setVideoTrack(track: MediaStreamTrack) {
@@ -69,9 +131,15 @@ export class CanvasRenderer {
 
     startRendering() {
         if (this.frameReader && !this.isRunning) {
+            this.trySetupRenderWorker()
+            if (!this.workerRenderingEnabled && this.canvas && !this.ctx) {
+                this.ctx = this.canvas.getContext("2d")
+            }
             this.isRunning = true
             this.readLoop()
-            requestAnimationFrame(this.drawLoop)
+            if (!this.workerRenderingEnabled) {
+                requestAnimationFrame(this.drawLoop)
+            }
         }
     }
 
@@ -102,7 +170,13 @@ export class CanvasRenderer {
                     this.stopRendering()
                     break
                 }
-                
+
+                if (this.workerRenderingEnabled && this.renderWorker) {
+                    // Transfer frame ownership to worker for rasterization.
+                    this.renderWorker.postMessage({ type: "frame", frame: value }, [value as any])
+                    continue
+                }
+
                 const old = this.latestFrame
                 this.latestFrame = value
                 if (old) old.close()
@@ -179,6 +253,12 @@ export class CanvasRenderer {
 
     destroy() {
         this.stopRendering()
+        if (this.renderWorker) {
+            this.renderWorker.postMessage({ type: "stop" })
+            this.renderWorker.terminate()
+            this.renderWorker = null
+        }
+        this.workerRenderingEnabled = false
         if (this.handleResize) {
             window.removeEventListener("resize", this.handleResize)
         }

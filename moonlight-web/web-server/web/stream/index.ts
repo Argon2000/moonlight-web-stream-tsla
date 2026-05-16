@@ -6,8 +6,15 @@ import { createSupportedVideoFormatsBits, VideoCodecSupport } from "./video.js"
 // @ts-ignore
 import Module from "./opus-stream-decoder.mjs"
 
-const decoderModule = Module();
-const OpusStreamDecoder = decoderModule.OpusStreamDecoder;
+type AudioDecodeWorkerInMessage =
+    | { type: "init" }
+    | { type: "decode"; packet: ArrayBuffer }
+    | { type: "free" }
+
+type AudioDecodeWorkerOutMessage =
+    | { type: "ready" }
+    | { type: "decoded"; left: ArrayBuffer; right: ArrayBuffer }
+    | { type: "error"; message: string }
 
 export type InfoEvent = CustomEvent<
     { type: "app", app: App } |
@@ -43,6 +50,14 @@ export type StreamAudioDiagnostics = {
     latePacketGaps: number
     currentTime: number
     nextAudioTime: number
+}
+
+export type StreamWorkerDiagnostics = {
+    workersAllowedBySettings: boolean
+    audioWorkerAttempted: boolean
+    audioWorkerActive: boolean
+    audioWorkerError: string | null
+    audioDecoderMode: "worker" | "main-thread" | "not-ready"
 }
 
 export function getStreamerSize(settings: StreamSettings, viewerScreenSize: [number, number]): [number, number] {
@@ -89,7 +104,14 @@ export class Stream {
 
     private audioContext: AudioContext | null = null
     private mainGainNode: GainNode | null = null
-    private audioDecoder: typeof OpusStreamDecoder | null = null
+    private audioDecoder: any = null
+    private audioDecodeWorker: Worker | null = null
+    private useAudioDecodeWorker: boolean = false
+    private audioDecodeWorkerAllowed: boolean
+    private audioDecodeWorkerInitAttempted: boolean = false
+    private audioDecodeWorkerInitError: string | null = null
+    private audioDecodeWorkerInitTimeoutId: ReturnType<typeof setTimeout> | null = null
+    private decoderInitInFlight: boolean = false
     private audioDecoderReady: boolean = false
     private nextAudioTime: number = 0
     private sourceNodes: Set<AudioBufferSourceNode> = new Set()
@@ -115,6 +137,7 @@ export class Stream {
         this.appId = appId
 
         this.settings = settings
+        this.audioDecodeWorkerAllowed = settings.useWorkers
 
         this.streamerSize = getStreamerSize(settings, viewerScreenSize)
 
@@ -174,23 +197,135 @@ export class Stream {
             this.debugLog("}")
         })
 
-        this.setupDecoder()
-        if(!this.settings?.canvasRenderer) {
-            this.setupAudioContext()
-        }
+        void this.setupDecoder()
+        this.setupAudioContext()
     }
 
     private async setupDecoder() {
+        if (this.audioDecoderReady || this.decoderInitInFlight) {
+            return
+        }
+
+        this.decoderInitInFlight = true
+        if (this.trySetupAudioDecodeWorker()) {
+            // decoderInitInFlight stays true — cleared when worker sends "ready" or fallback completes
+            return
+        }
+
+        await this.setupDecoderFallback()
+        this.decoderInitInFlight = false
+    }
+
+    private clearAudioWorkerInitTimeout() {
+        if (this.audioDecodeWorkerInitTimeoutId) {
+            clearTimeout(this.audioDecodeWorkerInitTimeoutId)
+            this.audioDecodeWorkerInitTimeoutId = null
+        }
+    }
+
+    private async fallbackFromAudioWorker(reason: string) {
+        this.clearAudioWorkerInitTimeout()
+        this.audioDecodeWorkerInitError = reason
+        this.audioDecodeWorker?.terminate()
+        this.audioDecodeWorker = null
+        this.useAudioDecodeWorker = false
+        this.audioDecoderReady = false
+        // decoderInitInFlight stays true to prevent resumeAudio from triggering another setupDecoder
+        await this.setupDecoderFallback()
+        this.decoderInitInFlight = false
+    }
+
+    private trySetupAudioDecodeWorker(): boolean {
+        this.audioDecodeWorkerInitAttempted = true
+        if (!this.audioDecodeWorkerAllowed) {
+            this.audioDecodeWorkerInitError = "Disabled by settings"
+            return false
+        }
+
+        if (typeof Worker === "undefined") {
+            this.audioDecodeWorkerInitError = "Worker API unsupported"
+            return false
+        }
+
         try {
+            this.audioDecodeWorker = new Worker(new URL("./audio_decode_worker.js", import.meta.url), { type: "module" })
+            this.audioDecodeWorker.onmessage = (event: MessageEvent<AudioDecodeWorkerOutMessage>) => {
+                const data = event.data
+                if (!data) return
+
+                if (data.type === "ready") {
+                    this.clearAudioWorkerInitTimeout()
+                    this.audioDecoderReady = true
+                    this.useAudioDecodeWorker = true
+                    this.decoderInitInFlight = false
+                    this.audioDecodeWorkerInitError = null
+                    this.debugLog("Audio decode worker ready")
+                    return
+                }
+
+                if (data.type === "decoded") {
+                    const left = new Float32Array(data.left)
+                    const right = new Float32Array(data.right)
+                    this.playPcm(left, right)
+                    return
+                }
+
+                if (data.type === "error") {
+                    this.audioDecodeErrors++
+                    console.error("Audio decode worker error", data.message)
+                    this.debugLog(`Audio decode worker error: ${data.message}`)
+                    if (!this.audioDecoderReady) {
+                        this.fallbackFromAudioWorker(`Worker init error: ${data.message}`)
+                    }
+                }
+            }
+
+            this.audioDecodeWorker.onerror = (event) => {
+                this.audioDecodeErrors++
+                console.error("Audio decode worker failed", event)
+                this.debugLog("Audio decode worker failed, falling back to main-thread decode")
+                this.fallbackFromAudioWorker("Worker runtime error")
+            }
+
+            const initMessage: AudioDecodeWorkerInMessage = { type: "init" }
+            this.audioDecodeWorker.postMessage(initMessage)
+
+            // Some browsers may never deliver a worker error event on module init failure.
+            // Fall back automatically if worker does not become ready in time.
+            this.clearAudioWorkerInitTimeout()
+            this.audioDecodeWorkerInitTimeoutId = setTimeout(() => {
+                if (!this.audioDecoderReady) {
+                    this.debugLog("Audio decode worker init timeout, falling back to main-thread decode")
+                    this.fallbackFromAudioWorker("Worker init timeout")
+                }
+            }, 4000)
+            return true
+        } catch (e) {
+            this.clearAudioWorkerInitTimeout()
+            this.debugLog(`Audio decode worker unavailable, fallback to main-thread decode: ${e}`)
+            this.audioDecodeWorker = null
+            this.useAudioDecodeWorker = false
+            this.audioDecodeWorkerInitError = String(e)
+            return false
+        }
+    }
+
+    private async setupDecoderFallback() {
+        try {
+            this.clearAudioWorkerInitTimeout()
+            const decoderModule = Module()
+            const OpusStreamDecoder = decoderModule.OpusStreamDecoder
+
             this.audioDecoder = new OpusStreamDecoder({
                 onDecode: (decoded: any) => {
-                    this.playPcm(decoded.left, decoded.right);
-                }
-            });
+                    this.playPcm(decoded.left, decoded.right)
+                },
+            })
 
             await this.audioDecoder.ready;
             this.audioDecoderReady = true;
-            this.debugLog("Opus decoder ready");
+            this.useAudioDecodeWorker = false
+            this.debugLog("Opus decoder ready (main thread)");
         } catch (e) {
             console.error("Failed to setup opus decoder", e);
             this.debugLog(`Failed to setup opus decoder: ${e}`);
@@ -650,7 +785,7 @@ export class Stream {
     }
 
     private onAudioDataChannelMessage(event: MessageEvent) {
-        if (!this.audioDecoder || !this.audioDecoderReady) return;
+        if (!this.audioDecoderReady) return;
         this.audioPacketsReceived++;
         if (event.data && event.data.byteLength) {
             this.audioBytesReceived += event.data.byteLength;
@@ -673,7 +808,13 @@ export class Stream {
         this.lastAudioPacketAt = now;
         
         try {
-            this.audioDecoder.decode(new Uint8Array(event.data));
+            if (this.useAudioDecodeWorker && this.audioDecodeWorker) {
+                const packet = event.data as ArrayBuffer
+                const msg: AudioDecodeWorkerInMessage = { type: "decode", packet }
+                this.audioDecodeWorker.postMessage(msg, [packet])
+            } else if (this.audioDecoder) {
+                this.audioDecoder.decode(new Uint8Array(event.data))
+            }
         } catch (e) {
             this.audioDecodeErrors++;
             console.error("Error decoding audio", e);
@@ -774,11 +915,25 @@ export class Stream {
         }
     }
 
+    getWorkerDiagnostics(): StreamWorkerDiagnostics {
+        return {
+            workersAllowedBySettings: this.audioDecodeWorkerAllowed,
+            audioWorkerAttempted: this.audioDecodeWorkerInitAttempted,
+            audioWorkerActive: this.useAudioDecodeWorker,
+            audioWorkerError: this.audioDecodeWorkerInitError,
+            audioDecoderMode: this.audioDecoderReady ? (this.useAudioDecodeWorker ? "worker" : "main-thread") : "not-ready",
+        }
+    }
+
     getStreamerSize(): [number, number] {
         return this.streamerSize
     }
 
     resumeAudio() {
+        if (!this.audioDecoderReady && !this.decoderInitInFlight) {
+            void this.setupDecoder()
+        }
+
         if (!this.audioContext) {
             this.setupAudioContext()
         }

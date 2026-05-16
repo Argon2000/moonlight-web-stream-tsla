@@ -171,7 +171,7 @@ class ViewerApp implements Component {
         if(this.settings.canvasRenderer) {
             this.canvasElement.classList.add("video-stream")
             this.div.appendChild(this.canvasElement)
-            this.canvasRenderer = new CanvasRenderer(this.canvasElement, settings.stretchToFit)
+            this.canvasRenderer = new CanvasRenderer(this.canvasElement, settings.stretchToFit, settings.useWorkers)
             this.videoElement.autoplay = false
         }
 
@@ -233,6 +233,7 @@ class ViewerApp implements Component {
         // Wire stats overlay to WebRTC peer (lazily resolved since peer is created async)
         this.statsOverlay.setPeerGetter(() => this.stream?.getPeer() ?? null)
         this.statsOverlay.setStreamGetter(() => this.stream)
+        this.statsOverlay.setWorkerDiagnosticsGetter(() => this.getWorkerDiagnostics())
         if (settings.showStreamStats) {
             this.statsOverlay.show()
         }
@@ -347,6 +348,15 @@ class ViewerApp implements Component {
 
     getStreamInput() {
         return this.stream?.getInput() ?? null
+    }
+
+    getWorkerDiagnostics() {
+        return {
+            stream: this.stream?.getWorkerDiagnostics() ?? null,
+            canvas: this.canvasRenderer?.getWorkerDiagnostics() ?? null,
+            canvasRendererEnabled: this.settings.canvasRenderer,
+            workersAllowedBySettings: this.settings.useWorkers,
+        }
     }
 
     // Keyboard

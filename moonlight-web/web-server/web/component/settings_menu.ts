@@ -24,12 +24,13 @@ export type StreamSettings = {
     toggleFullscreenWithKeybind: boolean,
     stretchToFit: boolean,
     showStreamStats: boolean,
+    useWorkers: boolean,
 }
 
 export function defaultStreamSettings(): StreamSettings {
     return {
         sidebarEdge: "left",
-        bitrate: 8000,
+        bitrate: 6000,
         packetSize: 1024,
         fps: 60,
         videoSampleQueueSize: 1,
@@ -38,7 +39,7 @@ export function defaultStreamSettings(): StreamSettings {
             width: 960,
             height: 540,
         },
-        dontForceH264: false,
+        dontForceH264: true,
         canvasRenderer: true,
         playAudioLocal: false,
         audioSampleQueueSize: 1,
@@ -50,6 +51,7 @@ export function defaultStreamSettings(): StreamSettings {
         toggleFullscreenWithKeybind: false,
         stretchToFit: true,
         showStreamStats: false,
+        useWorkers: true,
     }
 }
 
@@ -105,6 +107,7 @@ export class StreamSettingsComponent implements Component {
     private toggleFullscreenWithKeybind: InputComponent
     private stretchToFit: InputComponent
     private showStreamStats: InputComponent
+    private useWorkers: InputComponent
 
     constructor(settings?: StreamSettings) {
         const defaultSettings = defaultStreamSettings()
@@ -285,6 +288,13 @@ export class StreamSettingsComponent implements Component {
         this.canvasRenderer.addChangeListener(this.onSettingsChange.bind(this))
         this.canvasRenderer.mount(advancedSection)
 
+        // Worker acceleration toggle
+        this.useWorkers = new InputComponent("useWorkers", "checkbox", "Use Worker Acceleration (Audio Decode + Video Render)", {
+            checked: settings?.useWorkers ?? defaultSettings.useWorkers
+        })
+        this.useWorkers.addChangeListener(this.onSettingsChange.bind(this))
+        this.useWorkers.mount(advancedSection)
+
         // Stretch to fit
         this.stretchToFit = new InputComponent("stretchToFit", "checkbox", "Stretch image to fit window (Canvas Renderer Only)", {
             checked: settings?.stretchToFit ?? defaultSettings.stretchToFit
@@ -354,6 +364,7 @@ export class StreamSettingsComponent implements Component {
         settings.toggleFullscreenWithKeybind = this.toggleFullscreenWithKeybind.isChecked()
         settings.stretchToFit = this.stretchToFit.isChecked()
         settings.showStreamStats = this.showStreamStats.isChecked()
+        settings.useWorkers = this.useWorkers.isChecked()
 
         return settings
     }
