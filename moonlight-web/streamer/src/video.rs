@@ -3,7 +3,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread,
     time::Duration,
 };
 
@@ -117,11 +116,12 @@ impl TrackSampleVideoDecoder {
         sender: &mut TrackLocalSender<SequencedTrackLocalStaticRTP>,
         payloader: &mut impl Payloader,
         timestamp: u32,
-        frame_interval: Duration,
+        _frame_interval: Duration,
     ) {
-        // Collect all RTP packets for this frame first
-        let mut all_packets: Vec<Packet> = Vec::new();
-
+        // Send all RTP packets for this frame as fast as possible.
+        // No pacing: the playout-delay extension (0,0) already tells the browser
+        // to deliver frames immediately. Any delay here just blocks the callback
+        // thread and delays processing of subsequent frames from moonlight-common-c.
         let mut peekable = samples.drain(..).peekable();
         while let Some(sample) = peekable.next() {
             let packets = match packetize(
@@ -139,30 +139,8 @@ impl TrackSampleVideoDecoder {
                 }
             };
 
-            all_packets.extend(packets);
-        }
-
-        let packet_count = all_packets.len();
-
-        // Pacing: spread packets over ~75% of the actual frame interval to avoid
-        // bursting that causes bufferbloat on cellular networks.
-        // Only pace if we have enough packets to matter (>4 packets).
-        // Cap pacing budget at 12.5ms to avoid excessive latency on low-fps frames.
-        let pacing_interval = if packet_count > 4 && !frame_interval.is_zero() {
-            let frame_time_us = frame_interval.as_micros() as u64;
-            // Use 75% of frame time, capped at 12.5ms (equivalent to 80fps floor)
-            let pacing_budget_us = (frame_time_us * 3 / 4).min(12_500);
-            Duration::from_micros(pacing_budget_us / (packet_count as u64 - 1))
-        } else {
-            Duration::ZERO
-        };
-
-        for (i, packet) in all_packets.into_iter().enumerate() {
-            sender.blocking_send_sample(packet);
-
-            // Sleep between packets (skip after last packet)
-            if !pacing_interval.is_zero() && i < packet_count - 1 {
-                thread::sleep(pacing_interval);
+            for packet in packets {
+                sender.blocking_send_sample(packet);
             }
         }
     }
