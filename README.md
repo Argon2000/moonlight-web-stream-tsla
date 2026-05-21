@@ -1,6 +1,7 @@
 
-# Moonlight Web
+# Moonlight Web Tesla
 An unofficial [Moonlight Client](https://moonlight-stream.org/) allowing you to stream your pc to the Web.
+This specific fork focuses on optimizing running in a Tesla browser. Plenty of targeted fixes for audio/video and input (controllers) has been done.
 It hosts Web Server which will forward [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) traffic to a Browser using the [WebRTC Api](https://webrtc.org/).
 
 ![An image displaying: PC with sunshine and moonlight web installed, a browser making requests to it](/readme/structure.png)
@@ -39,7 +40,7 @@ It hosts Web Server which will forward [Sunshine](https://docs.lizardbyte.dev/pr
 
 1. Install [Sunshine](https://github.com/LizardByte/Sunshine/blob/v2025.628.4510/docs/getting_started.md)
 
-2. Download the [compressed archive](https://github.com/MrCreativ3001/moonlight-web-stream/releases/latest) for your platform and uncompress it or [build it yourself](#building)
+2. Download the [compressed archive](https://www.patreon.com/posts/windows-linux-158842535) for your platform and uncompress it or [build it yourself](#building)
 
 3. Run the "web-server" executable
 
@@ -112,7 +113,7 @@ Some (business) firewalls might be very strict and only allow tcp on port 443 fo
 {
     "webrtc_port_range": {
         "min": 40000,
-        "max": 40010
+        "max": 40100
     }
 }
 ```
@@ -255,7 +256,7 @@ This will set the port range on the web server used to communicate when using We
 {
     "webrtc_port_range": {
         "min": 40000,
-        "max": 40010
+        "max": 40100
     }
 }
 ```
@@ -267,14 +268,7 @@ A list of ice servers for webrtc to use.
 {
     "webrtc_ice_servers": [
         {
-            "urls": [
-                    "stun:l.google.com:19302",
-                    "stun:stun.l.google.com:19302",
-                    "stun:stun1.l.google.com:19302",
-                    "stun:stun2.l.google.com:19302",
-                    "stun:stun3.l.google.com:19302",
-                    "stun:stun4.l.google.com:19302",
-            ]
+            "urls": ["stun:stun.cloudflare.com:3478"]
         }
     ]
 }
@@ -327,12 +321,12 @@ Will always append the prefix to all requests made by the website.
 ```
 
 ## Contributors
-- Thanks to [@Argon2000](https://github.com/Argon2000) for implementing a canvas renderer, which makes this run in the Tesla browser.
+- Thanks a million to [@MrCreativ3001](https://github.com/MrCreativ3001) for the base project!
 
 ## Building
 Make sure you've cloned this repo with all it's submodules
 ```sh
-git clone --recursive https://github.com/MrCreativ3001/moonlight-web-stream.git
+git clone --recursive https://github.com/Argon2000/moonlight-web-stream-tsla.git
 ```
 A [Rust](https://www.rust-lang.org/tools/install) [nightly](https://rust-lang.github.io/rustup/concepts/channels.html) installation is required.
 
