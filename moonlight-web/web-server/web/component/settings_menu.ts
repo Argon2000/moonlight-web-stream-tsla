@@ -21,6 +21,7 @@ export type StreamSettings = {
     audioSampleQueueSize: number
     mouseScrollMode: MouseScrollMode
     controllerConfig: ControllerConfig
+    controllerDeviceMode: "auto" | "physical" | "virtual"
     toggleFullscreenWithKeybind: boolean,
     stretchToFit: boolean,
     showStreamStats: boolean,
@@ -49,6 +50,7 @@ export function defaultStreamSettings(): StreamSettings {
             invertAB: false,
             invertXY: false
         },
+        controllerDeviceMode: "auto",
         toggleFullscreenWithKeybind: false,
         stretchToFit: true,
         showStreamStats: false,
@@ -105,6 +107,7 @@ export class StreamSettingsComponent implements Component {
 
     private controllerInvertAB: InputComponent
     private controllerInvertXY: InputComponent
+    private controllerDeviceMode: SelectComponent
 
     private toggleFullscreenWithKeybind: InputComponent
     private stretchToFit: InputComponent
@@ -249,9 +252,23 @@ export class StreamSettingsComponent implements Component {
         this.controllerInvertXY.addChangeListener(this.onSettingsChange.bind(this))
         this.controllerInvertXY.mount(inputSection)
 
+        this.controllerDeviceMode = new SelectComponent("controllerDeviceMode", [
+            { value: "auto", name: "Auto (prefer physical)" },
+            { value: "physical", name: "Physical Only" },
+            { value: "virtual", name: "Virtual Only" },
+        ], {
+            displayName: "Controller Device Mode",
+            preSelectedOption: settings?.controllerDeviceMode ?? defaultSettings.controllerDeviceMode
+        })
+        this.controllerDeviceMode.addChangeListener(this.onSettingsChange.bind(this))
+        this.controllerDeviceMode.mount(inputSection)
+
         if (!window.isSecureContext) {
             this.controllerInvertAB.setEnabled(false)
             this.controllerInvertXY.setEnabled(false)
+            this.controllerDeviceMode.setOptionEnabled("auto", false)
+            this.controllerDeviceMode.setOptionEnabled("physical", false)
+            this.controllerDeviceMode.setOptionEnabled("virtual", false)
         }
 
 
@@ -369,6 +386,7 @@ export class StreamSettingsComponent implements Component {
 
         settings.controllerConfig.invertAB = this.controllerInvertAB.isChecked()
         settings.controllerConfig.invertXY = this.controllerInvertXY.isChecked()
+        settings.controllerDeviceMode = this.controllerDeviceMode.getValue() as any
 
         settings.toggleFullscreenWithKeybind = this.toggleFullscreenWithKeybind.isChecked()
         settings.stretchToFit = this.stretchToFit.isChecked()

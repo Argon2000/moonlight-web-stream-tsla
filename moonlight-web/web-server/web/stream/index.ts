@@ -177,7 +177,8 @@ export class Stream {
         const streamInputConfig = defaultStreamInputConfig()
         Object.assign(streamInputConfig, {
             mouseScrollMode: this.settings.mouseScrollMode,
-            controllerConfig: this.settings.controllerConfig
+            controllerConfig: this.settings.controllerConfig,
+            controllerDeviceMode: this.settings.controllerDeviceMode
         })
         this.input = new StreamInput(streamInputConfig)
 

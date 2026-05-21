@@ -18,6 +18,8 @@ const TOUCH_AS_CLICK_MAX_TIME_MS = 300
 const TOUCHES_AS_KEYBOARD_DISTANCE = 100
 
 const CONTROLLER_RUMBLE_INTERVAL_MS = 60
+// When a virtual and physical controller connect within this many ms, prefer the physical and skip the virtual in auto mode
+const VIRTUAL_SUPPRESSION_MS = 200
 
 function trySendChannel(channel: RTCDataChannel | null, buffer: ByteBuffer) {
     if (!channel || channel.readyState != "open") {
@@ -40,6 +42,7 @@ export type StreamInputConfig = {
     mouseScrollMode: MouseScrollMode
     touchMode: "touch" | "mouseRelative" | "pointAndDrag"
     controllerConfig: ControllerConfig
+    controllerDeviceMode?: "auto" | "physical" | "virtual"
 }
 
 export function defaultStreamInputConfig(): StreamInputConfig {
@@ -715,7 +718,7 @@ export class StreamInput {
             }
         }
 
-        const activePending: Array<{ index: number; gamepad: Gamepad; vendorId: string | null; isVirtual: boolean; state: GamepadState }> = []
+        const activePending: Array<{ index: number; gamepad: Gamepad; vendorId: string | null; isVirtual: boolean; state: GamepadState; connectedAt: number }> = []
 
         for (const [index, pending] of this.pendingGamepads.entries()) {
             const gamepad = gamepads[index] ?? null
@@ -739,7 +742,8 @@ export class StreamInput {
                 gamepad,
                 vendorId: pending.vendorId,
                 isVirtual: pending.isVirtual,
-                state: { ...state }
+                state: { ...state },
+                connectedAt: pending.connectedAt
             })
         }
 
@@ -747,21 +751,66 @@ export class StreamInput {
             return
         }
 
-        // Group by state signature to detect mirrors among pending controllers.
-        // Tesla mirrors input to all connected controllers, so multiple pending
-        // controllers with the same state in the same frame are mirrors.
-        // Only promote one per unique state (prefer physical over virtual).
-        const promotedSignatures = new Set<string>()
-        activePending.sort((a, b) => Number(a.isVirtual) - Number(b.isVirtual))
+        // Group pending controllers by state signature so we can detect mirrors.
+        const groups = new Map<string, Array<typeof activePending[number]>>()
         for (const candidate of activePending) {
             const sig = this.buildGamepadStateSignature(candidate.state)
-            if (promotedSignatures.has(sig)) {
-                this.addDebugLog(`Skipping mirrored pending controller: "${candidate.gamepad.id}" at index ${candidate.index} (same state as already promoted)`)
-                continue // Keep in pending - may produce independent input later
+            const list = groups.get(sig) ?? []
+            list.push(candidate)
+            groups.set(sig, list)
+        }
+
+        // For each group, choose which pending controller to promote based on
+        // controllerDeviceMode and timing. In "physical" mode, skip virtual
+        // devices entirely; in "virtual" mode, prefer virtual only; in "auto"
+        // mode, prefer physical and if a virtual appears within VIRTUAL_SUPPRESSION_MS
+        // of a physical connect, skip the virtual.
+        for (const [sig, list] of groups.entries()) {
+            if (!list || list.length === 0) continue
+
+            // Determine mode (default to auto)
+            const mode = this.config.controllerDeviceMode ?? "auto"
+
+            let chosen: typeof list[0] | null = null
+
+            if (mode === "physical") {
+                // prefer physical; if none, pick earliest
+                chosen = list.find(c => !c.isVirtual) ?? list.reduce((a, b) => (a.index < b.index ? a : b))
+            } else if (mode === "virtual") {
+                // prefer virtual; if none, pick earliest
+                chosen = list.find(c => c.isVirtual) ?? list.reduce((a, b) => (a.index < b.index ? a : b))
+            } else {
+                // auto
+                // find earliest physical and earliest virtual
+                const physicals = list.filter(c => !c.isVirtual)
+                const virtuals = list.filter(c => c.isVirtual)
+                if (physicals.length > 0 && virtuals.length > 0) {
+                    const earliestPhysical = physicals.reduce((a, b) => (a.connectedAt < b.connectedAt ? a : b))
+                    const earliestVirtual = virtuals.reduce((a, b) => (a.connectedAt < b.connectedAt ? a : b))
+                    const dt = Math.abs(earliestPhysical.connectedAt - earliestVirtual.connectedAt)
+                    if (dt <= VIRTUAL_SUPPRESSION_MS) {
+                        chosen = earliestPhysical
+                    } else {
+                        // far apart, pick the earliest connect overall
+                        chosen = list.reduce((a, b) => (a.connectedAt < b.connectedAt ? a : b))
+                    }
+                } else {
+                    // simple case: only one type present
+                    chosen = list.reduce((a, b) => (a.connectedAt < b.connectedAt ? a : b))
+                }
             }
 
-            this.registerGamepad(candidate.gamepad, candidate.vendorId, candidate.isVirtual)
-            promotedSignatures.add(sig)
+            if (chosen) {
+                // Remove every other candidate in this group from pendingGamepads so they
+                // cannot slip through into a later poll and get promoted separately.
+                for (const candidate of list) {
+                    if (candidate !== chosen) {
+                        this.pendingGamepads.delete(candidate.index)
+                        this.addDebugLog(`[${mode}] Discarded non-chosen pending gamepad at index ${candidate.index}: ${candidate.gamepad.id}`)
+                    }
+                }
+                this.registerGamepad(chosen.gamepad, chosen.vendorId, chosen.isVirtual)
+            }
         }
     }
 
@@ -787,6 +836,55 @@ export class StreamInput {
 
         const vendorId = this.getGamepadVendorId(gamepad)
         const isVirtual = this.isVirtualGamepad(gamepad)
+
+        // In physical/virtual mode, reject the wrong device type at connect time
+        // so it never enters the pending queue and cannot slip through later polls.
+        const mode = this.config.controllerDeviceMode ?? "auto"
+        if (mode === "physical" && isVirtual) {
+            this.addDebugLog(`[physical mode] Rejected virtual gamepad at index ${gamepad.index}: ${gamepad.id}`)
+            return
+        }
+        if (mode === "virtual" && !isVirtual) {
+            this.addDebugLog(`[virtual mode] Rejected physical gamepad at index ${gamepad.index}: ${gamepad.id}`)
+            return
+        }
+
+        // Auto mode: eagerly suppress virtual/physical pairing at connect time.
+        // This handles both orderings (physical-first and virtual-first):
+        //  - Virtual connects: if any physical is already pending or registered, reject
+        //    the virtual immediately without waiting for a state-based poll.
+        //  - Physical connects: evict any recently-connected virtual from pendingGamepads
+        //    so it can never be promoted.
+        if (mode === "auto") {
+            const now = performance.now()
+            if (isVirtual) {
+                // Reject this virtual only if a physical with the same vendor ID is
+                // already pending or registered AND connected within the suppression window.
+                const matchingPhysicalPending = Array.from(this.pendingGamepads.values()).find(
+                    p => !p.isVirtual && p.vendorId !== null && p.vendorId === vendorId &&
+                         (now - p.connectedAt) <= VIRTUAL_SUPPRESSION_MS
+                )
+                const matchingPhysicalRegistered = Array.from(this.gamepads.values()).find(
+                    e => !e.isVirtual && e.vendorId !== null && e.vendorId === vendorId
+                )
+                if (matchingPhysicalPending || matchingPhysicalRegistered) {
+                    this.addDebugLog(`[auto] Rejected virtual gamepad (same vendor ${vendorId}, physical present): ${gamepad.id}`)
+                    return
+                }
+            } else {
+                // Physical just connected — evict any pending virtual with the same vendor ID
+                // that connected within the suppression window.
+                for (const [pidx, pending] of this.pendingGamepads.entries()) {
+                    if (pending.isVirtual &&
+                        pending.vendorId !== null && pending.vendorId === vendorId &&
+                        (now - pending.connectedAt) <= VIRTUAL_SUPPRESSION_MS) {
+                        this.addDebugLog(`[auto] Evicting pending virtual on physical connect (vendor ${vendorId}): ${pending.gamepadId}`)
+                        this.pendingGamepads.delete(pidx)
+                    }
+                }
+            }
+        }
+
         this.pendingGamepads.set(gamepad.index, {
             gamepadId: gamepad.id,
             vendorId,
