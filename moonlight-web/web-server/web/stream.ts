@@ -1,5 +1,5 @@
 import "./polyfill/index.js"
-import { Api, getApi } from "./api.js";
+import { Api, getApi, logout } from "./api.js";
 import { Component } from "./component/index.js";
 import { showErrorPopup } from "./component/error.js";
 import { getStreamerSize, InfoEvent, Stream } from "./stream/index.js"
@@ -866,6 +866,7 @@ class ConnectionInfoModal implements Modal<void> {
 
     private debugDetailButton = document.createElement("button")
     private debugDetailRetryButton = document.createElement("button")
+    private authFailed = false
     private debugDetail = "" // We store this seperate because line breaks don't work when the element is not mounted on the dom
     private debugDetailDisplay = document.createElement("div")
 
@@ -902,7 +903,12 @@ class ConnectionInfoModal implements Modal<void> {
     }
 
     private onDebugDetailRetryClick() {
-        window.location.reload()
+        if (this.authFailed) {
+            logout()
+            window.location.href = window.location.origin + "/"
+        } else {
+            window.location.reload()
+        }
     }
 
     private debugLog(line: string) {
@@ -924,8 +930,16 @@ class ConnectionInfoModal implements Modal<void> {
             this.debugLog(text)
         } else if (data.type == "stageFailed") {
             const text = `Server: Failed Stage: ${data.stage} with error ${data.errorCode}`
-            this.text.innerText = text
             this.debugLog(text)
+            if (data.stage === "Authentication") {
+                this.authFailed = true
+                this.text.innerText = "Authentication failed. Please log in again."
+                this.debugDetailRetryButton.innerText = "Login Again"
+                this.debugDetailRetryButton.style.display = "inline-block"
+                showModal(this)
+            } else {
+                this.text.innerText = text
+            }
         } else if (data.type == "connectionComplete") {
             const text = `Connection Complete`
             this.text.innerText = text
