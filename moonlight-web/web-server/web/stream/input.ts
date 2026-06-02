@@ -267,7 +267,7 @@ export class StreamInput {
         }
     }
     onMouseWheel(event: WheelEvent) {
-        this.sendAccumulatedScroll(event.deltaX, -event.deltaY)
+        this.sendAccumulatedScroll(event.deltaX / 5, -event.deltaY / 5)
     }
 
     sendMouseMove(movementX: number, movementY: number) {

@@ -90,6 +90,7 @@ pub struct TrackSampleVideoDecoder {
     // Video important
     video_codec: Option<VideoCodec>,
     samples: Vec<Bytes>,
+    frame_buffer: bytes::BytesMut,
     needs_idr: Arc<AtomicBool>,
     old_presentation_time: Duration,
 }
@@ -106,6 +107,7 @@ impl TrackSampleVideoDecoder {
             supported_formats,
             video_codec: None,
             samples: Vec::new(),
+            frame_buffer: bytes::BytesMut::with_capacity(1024 * 1024),
             needs_idr: Default::default(),
             old_presentation_time: Duration::ZERO,
         }
@@ -285,11 +287,13 @@ impl VideoDecoder for TrackSampleVideoDecoder {
         };
 
         let total_len = unit.buffers.iter().map(|b| b.data.len()).sum();
-        let mut full_frame = Vec::with_capacity(total_len);
+        
+        self.frame_buffer.clear();
+        self.frame_buffer.reserve(total_len);
         for buffer in unit.buffers {
-            full_frame.extend_from_slice(buffer.data);
+            self.frame_buffer.extend_from_slice(buffer.data);
         }
-        let full_frame_bytes = Bytes::from(full_frame);
+        let full_frame_bytes = self.frame_buffer.split().freeze();
 
         match &mut self.video_codec {
             // -- H264
@@ -387,18 +391,13 @@ fn packetize(
 }
 
 pub(crate) fn video_format_to_codec(format: VideoFormat) -> Option<RTCRtpCodecParameters> {
+    // For real-time streaming, waiting for NACK retransmissions adds latency (jitter).
+    // We only enable PLI (Picture Loss Indication) so the browser immediately requests a new IDR/I-frame
+    // if a packet is lost, which is much faster than waiting for UDP retransmission.
     let rtcp_feedback = vec![
         RTCPFeedback {
             typ: "nack".to_string(),
-            parameter: "".to_string(),
-        },
-        RTCPFeedback {
-            typ: "nack".to_string(),
             parameter: "pli".to_string(),
-        },
-        RTCPFeedback {
-            typ: "goog-remb".to_string(),
-            parameter: "".to_string(),
         },
     ];
 

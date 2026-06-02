@@ -284,12 +284,12 @@ class ViewerApp implements Component {
     }
 
     onUserInteraction() {
+        this.stream?.resumeAudio();
+        
         if (this.hasInteracted) return
         this.hasInteracted = true
 
         this.focusInput()
-
-        this.stream?.resumeAudio();
 
         if (this.videoElement) {
             this.videoElement.muted = false

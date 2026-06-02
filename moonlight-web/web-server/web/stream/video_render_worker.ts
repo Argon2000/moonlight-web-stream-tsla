@@ -202,8 +202,13 @@ function drawFrame(frame: VideoFrame) {
             resizeQuality: "low",
         }).then(bitmap => {
             bitmapCtx!.transferFromImageBitmap(bitmap)
-        }).catch(() => {})
-        frame.close()
+            // Explicitly close the bitmap to eagerly free the JS wrapper and reduce GC pressure
+            bitmap.close()
+            // Close the frame ONLY after createImageBitmap is done to ensure it's not prematurely recycled
+            frame.close()
+        }).catch(() => {
+            frame.close()
+        })
         return
     }
 

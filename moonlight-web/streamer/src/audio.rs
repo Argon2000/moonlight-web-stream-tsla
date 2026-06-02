@@ -149,7 +149,7 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
             }
 
             // Aggregation buffer for outgoing chunks
-            let mut pending: Vec<Bytes> = Vec::new();
+            let mut pending = bytes::BytesMut::with_capacity(4096);
             // Flush interval — batches multiple Opus frames into one DataChannel message.
             // At 48kHz/5ms per frame, 10ms accumulates ~2 frames per send.
             let mut interval = time::interval(Duration::from_millis(10));
@@ -159,13 +159,8 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
                     biased;
                     _ = interval.tick() => {
                         if !pending.is_empty() {
-                            // Concatenate pending chunks into one payload
-                            let total_len: usize = pending.iter().map(|b| b.len()).sum();
-                            let mut buf = Vec::with_capacity(total_len);
-                            for b in pending.drain(..) {
-                                buf.extend_from_slice(&b);
-                            }
-                            if let Err(e) = channel.send(&Bytes::from(buf)).await {
+                            let payload = pending.split().freeze();
+                            if let Err(e) = channel.send(&payload).await {
                                 warn!("Failed to send aggregated audio data: {:?}", e);
                             }
                         }
@@ -186,16 +181,12 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
 
                                 // Drain any chunks produced by writer and append to pending
                                 while let Ok(chunk) = chunk_rx.try_recv() {
-                                    pending.push(chunk);
+                                    pending.extend_from_slice(&chunk);
                                 }
                                 // If pending is large, flush immediately
-                                let pending_bytes: usize = pending.iter().map(|b| b.len()).sum();
-                                if pending_bytes >= 16 * 1024 {
-                                    let mut buf = Vec::with_capacity(pending_bytes);
-                                    for b in pending.drain(..) {
-                                        buf.extend_from_slice(&b);
-                                    }
-                                    if let Err(e) = channel.send(&Bytes::from(buf)).await {
+                                if pending.len() >= 16 * 1024 {
+                                    let payload = pending.split().freeze();
+                                    if let Err(e) = channel.send(&payload).await {
                                         warn!("Failed to send aggregated audio data (eager flush): {:?}", e);
                                     }
                                 }
@@ -203,12 +194,8 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
                             None => {
                                 // Receiver closed — flush any pending and exit
                                 if !pending.is_empty() {
-                                    let total_len: usize = pending.iter().map(|b| b.len()).sum();
-                                    let mut buf = Vec::with_capacity(total_len);
-                                    for b in pending.drain(..) {
-                                        buf.extend_from_slice(&b);
-                                    }
-                                    if let Err(e) = channel.send(&Bytes::from(buf)).await {
+                                    let payload = pending.split().freeze();
+                                    if let Err(e) = channel.send(&payload).await {
                                         warn!("Failed to send final aggregated audio data: {:?}", e);
                                     }
                                 }

@@ -453,8 +453,13 @@ export class CanvasRenderer {
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
         }
         this.ctx.drawImage(frame, this.offsetX, this.offsetY, this.drawWidth, this.drawHeight)
+        
+        // Eagerly transfer GPU rasterization out of JS memory and close the frame
+        // to massively decrease GC pressure, avoiding the wait for the next frame
         this.drawnFrameCount++
+        this.latestFrameDrawn = true
         frame.close()
+        this.latestFrame = null
     }
 
     private offsetX = 0;

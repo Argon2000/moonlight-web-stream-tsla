@@ -10,7 +10,7 @@ use webrtc::{
     rtcp::packet::Packet,
     rtp::{
         self,
-        extension::{HeaderExtension, playout_delay_extension::PlayoutDelayExtension},
+        extension::HeaderExtension,
     },
     rtp_transceiver::rtp_sender::RTCRtpSender,
     track::track_local::{
@@ -135,12 +135,11 @@ async fn sample_sender<Track>(track: Arc<Track>, mut receiver: Receiver<Track::S
 where
     Track: TrackLike,
 {
-    // Playout delay: (0, 0) = let the browser use its own adaptive jitter buffer
-    // with no constraints. This minimizes latency. The browser will still buffer
-    // internally based on observed network jitter.
-    let extensions = [HeaderExtension::PlayoutDelay(PlayoutDelayExtension::new(
-        0, 0,
-    ))];
+    // We do NOT send the PlayoutDelayExtension.
+    // Setting it to (0, 0) disables WebRTC's adaptive jitter buffer, causing severe frame drops
+    // on cellular networks with 20ms+ latency jitter. Letting the browser manage its own jitter
+    // buffer is essential for smooth real-time streaming over variable networks.
+    let extensions = [];
     while let Some(sample) = receiver.recv().await {
         if let Err(err) = track
             .write_with_extensions(

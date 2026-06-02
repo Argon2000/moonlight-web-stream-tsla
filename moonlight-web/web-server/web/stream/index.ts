@@ -780,6 +780,11 @@ export class Stream {
     // -- Track and Data Channels
     private onTrack(event: RTCTrackEvent) {
 
+        if (event.receiver && "playoutDelayHint" in event.receiver) {
+            // @ts-ignore
+            event.receiver.playoutDelayHint = 0;
+        }
+
         if(!this.settings?.canvasRenderer) {
             const stream = event.streams[0]
             if (stream) {
