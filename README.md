@@ -41,8 +41,8 @@ https://youtu.be/whdvHChCQbg?si=WLcgPDclkdr8n41i
 
 ## Limitations
 - Features that only work in a [Secure Context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts#:~:text=They%20must%20be,be%20considered%20deprecated.) -> [How to configure a Secure Context / https](#configuring-https)
-  - Controllers: [Gamepad API](https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API)
   - Keyboard Lock (allows to capture almost all keys also OS Keys): [Experimental Keyboard Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard_API)
+- Controllers (USB/Bluetooth gamepads): work over HTTP via the [Gamepad API](https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API) — no HTTPS required
 
 ## Installation
 
