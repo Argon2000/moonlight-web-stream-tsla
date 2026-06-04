@@ -78,8 +78,6 @@ Or simply right-click `setup.ps1` → **Run with PowerShell** (it will self-elev
 
 Follow the prompts. The wizard will guide you through each step and explain what it is doing.
 
-> **Recommended port:** The wizard defaults to port **43780**. Avoid 80, 443, and 8080 — these are commonly restricted by ISPs and routers.
-
 > **HTTPS / Tesla access:** Choose option 1 (Let's Encrypt) in the certificate step. You need a domain name first — see [Getting a free domain name](#getting-a-free-domain-name).
 
 ### Manual Setup
