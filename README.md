@@ -1,8 +1,9 @@
 
-# Moonlight Web Tesla
-An unofficial [Moonlight Client](https://moonlight-stream.org/) allowing you to stream your pc to the Web.
-This specific fork focuses on optimizing running in a Tesla browser. Plenty of targeted fixes for audio/video and input (controllers) has been done.
-It hosts Web Server which will forward [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) traffic to a Browser using the [WebRTC Api](https://webrtc.org/).
+# Moonlight Web Tesla — Stream Your PC to the Tesla Browser
+
+**Stream your entire PC to the Tesla in-car browser** using [Moonlight](https://moonlight-stream.org/) + [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) over WebRTC. Play games, watch YouTube/Netflix/Twitch, browse the web, or run any desktop application — right on the Tesla touchscreen. Works while parked, charging and in D mode.
+
+This is a Tesla-optimized fork of [moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) — a browser-based Moonlight client. It includes **dozens of Tesla-specific fixes** for audio, video, input/gamepad handling, and WebSocket/WebRTC reliability that are required because the Tesla Chromium browser behaves differently from standard desktop browsers.
 
 ![An image displaying: PC with sunshine and moonlight web installed, a browser making requests to it](/readme/structure.png)
 
@@ -155,11 +156,18 @@ Check your current public IP at [whatismyip.com](https://www.whatismyip.com/). Y
 
    > **Tip:** The `setup.ps1` wizard can do this automatically via UPnP.
 
-4. **Use the Cloudflare / Google STUN server** and `udp4` only (already in the default config):
+4. **Use the Cloudflare / Google STUN servers** and `udp4` only (already in the default config):
    ```json
    {
      "webrtc_ice_servers": [
-       { "urls": ["stun:stun.cloudflare.com:3478"] }
+       { "urls": [
+           "stun:stun.cloudflare.com:3478",
+           "stun:stun.l.google.com:19302",
+           "stun:stun1.l.google.com:3478",
+           "stun:stun2.l.google.com:19302",
+           "stun:stun3.l.google.com:3478",
+           "stun:stun4.l.google.com:19302"
+       ] }
      ],
      "webrtc_network_types": ["udp4"]
    }
@@ -565,3 +573,19 @@ It'll communicate via stdin and stdout with the web server to negotiate the WebR
 
 Required for building:
 - [moonlight-common-sys](#moonlight-common-sys)
+
+## Why this fork exists
+
+The Tesla in-car browser has unique constraints that prevent vanilla Moonlight Web from working:
+- **Blocks local/private IP access** — you must use a real domain name
+- **WebSocket connections fail intermittently** (~50% of the time) — this fork auto-retries transparently
+- **Audio autoplay is blocked** — handled with proper AudioContext resume on first interaction
+- **ICE gathering behaves non-standard** — uses non-trickle ICE with timeout fallback
+- **Gamepad/controller input quirks** — mapped correctly for the Tesla browser's Gamepad API implementation
+- **No WASM decoder needed** — Tesla has native H.264/HEVC codec support
+- **Works in Drive mode** — the Tesla browser remains functional while driving; passengers can stream video, games, or any content
+
+### Keywords / Use Cases
+> Tesla game streaming, Moonlight Tesla, stream PC to Tesla, Sunshine Tesla, remote desktop Tesla, cloud gaming Tesla, Tesla screen PC games, Tesla entertainment while charging, Tesla entertainment while driving, WebRTC Tesla, Moonlight web client, watch YouTube on Tesla, watch Netflix on Tesla, Tesla browser streaming, Tesla video streaming, stream to Tesla touchscreen
+
+It hosts a lightweight Web Server which forwards [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) traffic to the browser using the [WebRTC API](https://webrtc.org/). No additional hardware or apps required — just your PC running Sunshine, port forwarding, and a domain name.
