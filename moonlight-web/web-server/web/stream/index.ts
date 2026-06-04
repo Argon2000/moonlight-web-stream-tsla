@@ -97,7 +97,7 @@ export class Stream {
 
     private mediaStream: MediaStream = new MediaStream()
 
-    private ws: WebSocket
+    private ws!: WebSocket
 
     private peer: RTCPeerConnection | null = null
     private input: StreamInput
@@ -165,16 +165,9 @@ export class Stream {
 
         this.streamerSize = getStreamerSize(settings, viewerScreenSize)
 
-        // Configure web socket
-        this.ws = new WebSocket(`${api.host_url}/host/stream`)
-        this.ws.addEventListener("error", this.onError.bind(this))
-        this.ws.addEventListener("open", this.onWsOpen.bind(this))
-        this.ws.addEventListener("close", this.onWsClose.bind(this))
-        this.ws.addEventListener("message", this.onRawWsMessage.bind(this))
-
+        // Prepare the auth message to buffer-send on each WS attempt
         const fps = this.settings.fps
-
-        this.sendWsMessage({
+        this.pendingAuthMessage = {
             AuthenticateAndInit: {
                 credentials: this.api.credentials,
                 host_id: this.hostId,
@@ -191,7 +184,15 @@ export class Stream {
                 video_colorspace: "Rec709", // TODO <---
                 video_color_range_full: true, // TODO <---
             }
-        })
+        }
+
+        // Connect WebSocket (with auto-retry)
+        this.connectWebSocket()
+
+        // Ensure the WS is cleanly closed on page reload/navigation so the browser
+        // doesn't leave a lingering connection that blocks the next attempt.
+        this.beforeUnloadHandler = () => { this.ws.close() }
+        window.addEventListener("beforeunload", this.beforeUnloadHandler)
 
         // Stream Input
         const streamInputConfig = defaultStreamInputConfig()
@@ -592,14 +593,24 @@ export class Stream {
         this.audioDecodeWorker.postMessage({ type: "recycle", buffers }, buffers)
     }
 
+    private debugLogBuffer: string[] = []
+
     private debugLog(message: string) {
         for (const line of message.split("\n")) {
+            this.debugLogBuffer.push(line)
             const event: InfoEvent = new CustomEvent("stream-info", {
                 detail: { type: "addDebugLine", line }
             })
 
             this.eventTarget.dispatchEvent(event)
         }
+    }
+
+    /** Send accumulated debug log to server for remote diagnostics. */
+    private sendDebugLogToServer() {
+        if (this.debugLogBuffer.length === 0) return
+        const log = this.debugLogBuffer.join("\n")
+        this.sendWsMessage({ ClientLog: { log } })
     }
 
     private async createPeer(configuration: RTCConfiguration) {
@@ -699,13 +710,13 @@ export class Stream {
         else if ("WebRtcConfig" in message) {
             const iceServers = message.WebRtcConfig.ice_servers
 
-            this.createPeer({
-                iceServers: iceServers
-            })
-
             this.debugLog(`Using WebRTC Ice Servers: ${createPrettyList(
                 iceServers.map(server => server.urls).reduce((list, url) => list.concat(url), [])
             )}`)
+
+            await this.createPeer({
+                iceServers: iceServers
+            })
         }
         // -- Signaling
         else if ("Signaling" in message) {
@@ -739,20 +750,52 @@ export class Stream {
             return
         }
 
-        // If we already have a remote description, the streamer is driving
-        // negotiation — suppress client-initiated offers to avoid glare.
-        if (this.remoteDescription && this.peer.signalingState !== "stable") {
-            this.debugLog("Suppressing client offer — streamer is driving negotiation")
+        // Suppress re-entrant negotiation: if we are already making an offer, or if the
+        // signaling state is not stable (a negotiation round-trip is in progress), do nothing.
+        // This prevents a duplicate offer from the async negotiationneeded event that fires
+        // after addTransceiver(), which would race with and invalidate the first offer/answer.
+        if (this.makingOffer || this.peer.signalingState !== "stable") {
+            this.debugLog(`Suppressing negotiation (makingOffer=${this.makingOffer}, state=${this.peer.signalingState})`)
             return
         }
 
         this.makingOffer = true
         try {
             await this.peer.setLocalDescription()
+            await this.waitForIceGathering()
             await this.sendLocalDescription()
         } finally {
             this.makingOffer = false
         }
+    }
+
+    /**
+     * Wait for ICE gathering to complete so all candidates are embedded in the
+     * local SDP. This avoids relying on trickle ICE (separate candidate messages)
+     * which fails on Tesla browsers that kill the WS send path after the initial offer.
+     */
+    private iceGatheringResolve: (() => void) | null = null
+    private waitForIceGathering(): Promise<void> {
+        return new Promise((resolve) => {
+            if (!this.peer) { resolve(); return }
+            if (this.peer.iceGatheringState === "complete") { resolve(); return }
+
+            // Resolve on timeout as a safety net — most candidates arrive within 2s.
+            const timeout = setTimeout(() => {
+                this.debugLog("ICE gathering timed out after 3s, sending what we have")
+                this.iceGatheringResolve = null
+                resolve()
+            }, 3000)
+
+            // The null-candidate event (end-of-candidates) is the most reliable
+            // cross-browser signal that gathering finished. onIceCandidate will call this.
+            this.iceGatheringResolve = () => {
+                clearTimeout(timeout)
+                this.iceGatheringResolve = null
+                this.debugLog("ICE gathering complete (null candidate)")
+                resolve()
+            }
+        })
     }
 
 
@@ -780,6 +823,7 @@ export class Stream {
 
         if (description.type === "offer") {
             await this.peer.setLocalDescription()
+            await this.waitForIceGathering()
             await this.sendLocalDescription()
         }
 
@@ -801,7 +845,11 @@ export class Stream {
 
         this.debugLog(`Adding Ice Candidate: ${candidate.candidate}`)
 
-        this.peer.addIceCandidate(candidate)
+        try {
+            await this.peer.addIceCandidate(candidate)
+        } catch (err) {
+            this.debugLog(`Failed to add ICE candidate: ${err}`)
+        }
     }
 
     private sendLocalDescription() {
@@ -823,24 +871,23 @@ export class Stream {
         })
     }
     private onIceCandidate(event: RTCPeerConnectionIceEvent) {
-        const candidateJson = event.candidate?.toJSON()
-        if (!candidateJson || !candidateJson?.candidate) {
+        if (!event.candidate) {
+            // Null candidate = gathering complete. Resolve the waitForIceGathering promise.
+            if (this.iceGatheringResolve) {
+                this.iceGatheringResolve()
+            }
+            return
+        }
+        const candidateJson = event.candidate.toJSON()
+        if (!candidateJson?.candidate) {
             return;
         }
-        this.debugLog(`Sending Ice Candidate: ${candidateJson.candidate}`)
+        this.debugLog(`Local Ice Candidate gathered: ${candidateJson.candidate}`)
 
-        const candidate: RtcIceCandidate = {
-            candidate: candidateJson?.candidate,
-            sdp_mid: candidateJson?.sdpMid ?? null,
-            sdp_mline_index: candidateJson?.sdpMLineIndex ?? null,
-            username_fragment: candidateJson?.usernameFragment ?? null
-        }
-
-        this.sendWsMessage({
-            Signaling: {
-                AddIceCandidate: candidate
-            }
-        })
+        // We use non-trickle ICE: candidates are bundled into the SDP (via
+        // waitForIceGathering) before the offer/answer is sent. Individual
+        // candidate messages are NOT sent because Tesla's browser drops the
+        // WS send path after the initial offer, so they never arrive.
     }
 
     // -- Track and Data Channels
@@ -893,6 +940,7 @@ export class Stream {
         this.debugLog(`Changing Peer State to ${this.peer.connectionState}`)
 
         if (this.peer.connectionState == "failed" || this.peer.connectionState == "closed") {
+            this.sendDebugLogToServer()
             const customEvent: InfoEvent = new CustomEvent("stream-info", {
                 detail: {
                     type: "error",
@@ -904,6 +952,11 @@ export class Stream {
             // Transient state — log but don't show error modal; ICE restart is handled by streamer
             this.debugLog("Connection temporarily disconnected, waiting for recovery...")
         } else if (this.peer.connectionState == "connected") {
+            // Clear the connection timeout — we're fully connected.
+            if (this.wsConnectTimeout !== null) {
+                clearTimeout(this.wsConnectTimeout)
+                this.wsConnectTimeout = null
+            }
             // Connection recovered — dismiss any error modal
             const customEvent: InfoEvent = new CustomEvent("stream-info", {
                 detail: {
@@ -1013,9 +1066,77 @@ export class Stream {
 
     // -- Raw Web Socket stuff
     private wsSendBuffer: Array<string> = []
+    private wsConnectTimeout: ReturnType<typeof setTimeout> | null = null
+    private beforeUnloadHandler: (() => void) | null = null
+    private wsAttempt: number = 0
+    private readonly WS_MAX_ATTEMPTS = 10
+    private readonly WS_CONNECT_TIMEOUT_MS = 8000
+    private readonly WS_RETRY_DELAY_MS = 0
+    private pendingAuthMessage: any = null
+    // Serializes WebSocket message processing so messages are handled one-at-a-time
+    // in arrival order. Without this, an ICE candidate message can race with the
+    // remote-description (answer) message and call addIceCandidate before
+    // setRemoteDescription resolves, silently dropping the candidate.
+    private messageProcessingQueue: Promise<void> = Promise.resolve()
+
+    private connectWebSocket() {
+        this.wsAttempt++
+        const attempt = this.wsAttempt
+        this.debugLog(`WebSocket connect attempt ${attempt}/${this.WS_MAX_ATTEMPTS}`)
+
+        // Unique cache-buster prevents browser from reusing a stale connection
+        const wsUrl = `${this.api.host_url}/host/stream?_t=${Date.now()}`
+        this.ws = new WebSocket(wsUrl)
+        this.ws.addEventListener("error", this.onError.bind(this))
+        this.ws.addEventListener("open", this.onWsOpen.bind(this))
+        this.ws.addEventListener("close", this.onWsClose.bind(this))
+        this.ws.addEventListener("message", this.onRawWsMessage.bind(this))
+
+        // Buffer the auth message so it's sent on open
+        this.wsSendBuffer = []
+        if (this.pendingAuthMessage) {
+            this.sendWsMessage(this.pendingAuthMessage)
+        }
+
+        // Timeout: if WS doesn't open, retry or give up
+        this.wsConnectTimeout = setTimeout(() => {
+            this.wsConnectTimeout = null
+            this.debugLog(`WebSocket attempt ${attempt} timed out after ${this.WS_CONNECT_TIMEOUT_MS}ms`)
+            this.ws.close()
+
+            if (this.wsAttempt < this.WS_MAX_ATTEMPTS) {
+                // Retry after a delay to let browser clean up the dead connection
+                setTimeout(() => this.connectWebSocket(), this.WS_RETRY_DELAY_MS)
+            } else {
+                this.debugLog(`All ${this.WS_MAX_ATTEMPTS} WebSocket attempts failed`)
+                const event: InfoEvent = new CustomEvent("stream-info", {
+                    detail: { type: "error", message: "WebSocket connection timed out (all retries exhausted)" }
+                })
+                this.eventTarget.dispatchEvent(event)
+            }
+        }, this.WS_CONNECT_TIMEOUT_MS)
+    }
 
     private onWsOpen() {
-        this.debugLog(`Web Socket Open`)
+        this.debugLog(`Web Socket Open (attempt ${this.wsAttempt}/${this.WS_MAX_ATTEMPTS})`)
+
+        if (this.wsConnectTimeout !== null) {
+            clearTimeout(this.wsConnectTimeout)
+            this.wsConnectTimeout = null
+        }
+
+        // If we don't reach "connected" state within 30s after WS opens,
+        // something is stuck (server not responding, ICE failing silently, etc.)
+        this.wsConnectTimeout = setTimeout(() => {
+            if (!this.peer || this.peer.connectionState !== "connected") {
+                this.debugLog("Stream connection timed out after 30s")
+                this.sendDebugLogToServer()
+                const event: InfoEvent = new CustomEvent("stream-info", {
+                    detail: { type: "error", message: "Stream connection timed out" }
+                })
+                this.eventTarget.dispatchEvent(event)
+            }
+        }, 30000)
 
         for (const raw of this.wsSendBuffer.splice(0)) {
             this.ws.send(raw)
@@ -1023,6 +1144,13 @@ export class Stream {
     }
     private onWsClose() {
         this.debugLog(`Web Socket Closed`)
+
+        // If we're still in the retry loop, don't dispatch an error — connectWebSocket
+        // will handle the retry or final failure.
+        if (this.wsAttempt < this.WS_MAX_ATTEMPTS && this.wsConnectTimeout === null) {
+            // Closed by our timeout handler, retry is pending — suppress error
+            return
+        }
 
         // If the WebSocket closes before we have a peer connection, it means
         // the connection failed entirely (e.g. Tesla browser dropping the WS).
@@ -1044,14 +1172,20 @@ export class Stream {
         }
     }
 
-    private async onRawWsMessage(event: MessageEvent) {
-        const data = event.data
-        if (typeof data != "string") {
-            return
-        }
-
-        let message = JSON.parse(data)
-        await this.onMessage(message)
+    private onRawWsMessage(event: MessageEvent) {
+        // Chain onto the serialization queue — each message waits for the previous to finish.
+        this.messageProcessingQueue = this.messageProcessingQueue.then(async () => {
+            try {
+                const data = event.data
+                if (typeof data !== "string") {
+                    return
+                }
+                const message = JSON.parse(data)
+                await this.onMessage(message)
+            } catch (err) {
+                console.error("Error processing WebSocket message", err)
+            }
+        })
     }
 
     private onError(event: Event) {

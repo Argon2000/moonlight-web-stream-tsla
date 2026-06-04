@@ -61,7 +61,7 @@ export class Host implements Component {
         this.updateCache(newCache)
     }
     async getCurrentGame(): Promise<number | null> {
-        await this.forceFetch()
+        await this.forceFetch(true)
 
         if (this.cache && isDetailedHost(this.cache) && this.cache.current_game != 0) {
             return this.cache.current_game

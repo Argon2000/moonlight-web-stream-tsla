@@ -256,6 +256,10 @@ pub enum StreamClientMessage {
         video_color_range_full: bool,
     },
     Signaling(StreamSignalingMessage),
+    /// Client debug log sent on connection failure for remote diagnostics.
+    ClientLog {
+        log: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, TS, Clone, Default)]

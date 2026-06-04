@@ -33,18 +33,26 @@ pub async fn start_host(
     let (response, mut session, mut stream) = actix_ws::handle(&request, payload)?;
 
     actix_rt::spawn(async move {
+        info!("[Stream]: new WebSocket connection established, awaiting auth message");
         let message;
         loop {
             message = match stream.recv().await {
                 Some(Ok(Message::Text(text))) => text,
                 Some(Ok(Message::Binary(_))) => {
+                    warn!("[Stream]: unexpected binary message during auth phase");
                     return;
                 }
-                Some(Ok(_)) => continue,
-                Some(Err(_)) => {
+                Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) | Some(Ok(Message::Nop)) => continue,
+                Some(Ok(other)) => {
+                    warn!("[Stream]: unexpected message during auth phase: {other:?}");
+                    continue;
+                }
+                Some(Err(err)) => {
+                    warn!("[Stream]: WebSocket error during auth phase: {err}");
                     return;
                 }
                 None => {
+                    info!("[Stream]: WebSocket closed before auth message received");
                     return;
                 }
             };
@@ -75,9 +83,12 @@ pub async fn start_host(
             video_color_range_full,
         } = message
         else {
+            warn!("[Stream]: first WS message was not AuthenticateAndInit");
             let _ = session.close(None).await;
             return;
         };
+
+        info!("[Stream]: received auth request for host={host_id} app={app_id} ({width}x{height}@{fps}fps)");
 
         let authenticated = credentials.authenticate_with_credentials(request_credentials.as_deref())
             || match request_credentials.as_deref() {
@@ -86,6 +97,7 @@ pub async fn start_host(
             };
 
         if !authenticated {
+            warn!("[Stream]: authentication failed for stream request");
             let _ = send_ws_message(
                 &mut session,
                 StreamServerMessage::StageFailed {
@@ -242,6 +254,9 @@ pub async fn start_host(
             )
             .await;
 
+        // Keep a clone of session for responding to pings in the WS→IPC relay below.
+        let mut ping_session = session.clone();
+
         // Redirect ipc message into ws
         spawn(async move {
             while let Some(message) = ipc_receiver.recv().await {
@@ -281,13 +296,46 @@ pub async fn start_host(
             .await;
 
         // Redirect ws message into ipc
-        while let Some(Ok(Message::Text(text))) = stream.recv().await {
-            let Ok(message) = serde_json::from_str::<StreamClientMessage>(&text) else {
-                warn!("[Stream]: failed to deserialize from json");
-                return;
-            };
-
-            ipc_sender.send(ServerIpcMessage::WebSocket(message)).await;
+        loop {
+            match stream.recv().await {
+                Some(Ok(Message::Text(text))) => {
+                    let Ok(message) = serde_json::from_str::<StreamClientMessage>(&text) else {
+                        warn!("[Stream]: failed to deserialize from json: {text}");
+                        continue;
+                    };
+                    // Log client debug logs locally instead of forwarding to streamer
+                    if let StreamClientMessage::ClientLog { ref log } = message {
+                        info!("[Client Log]:\n{log}");
+                        continue;
+                    }
+                    debug!("[Stream]: relaying WS→IPC: {text}");
+                    ipc_sender.send(ServerIpcMessage::WebSocket(message)).await;
+                }
+                // Respond to keep-alive pings so the browser doesn't close the connection.
+                Some(Ok(Message::Ping(data))) => {
+                    debug!("[Stream]: received WS Ping, sending Pong");
+                    let _ = ping_session.pong(&data).await;
+                }
+                // Ignore pong/nop frames — not an error.
+                Some(Ok(Message::Pong(_))) | Some(Ok(Message::Nop)) => {}
+                Some(Ok(Message::Close(reason))) => {
+                    info!("[Stream]: WS closed by client: {reason:?}");
+                    break;
+                }
+                // Binary frames and continuation frames are unexpected; ignore them.
+                Some(Ok(other)) => {
+                    debug!("[Stream]: ignoring unexpected WS frame: {other:?}");
+                }
+                // WebSocket closed or error — exit relay.
+                Some(Err(err)) => {
+                    warn!("[Stream]: WS relay error: {err:?}");
+                    break;
+                }
+                None => {
+                    info!("[Stream]: WS stream ended (None)");
+                    break;
+                }
+            }
         }
 
         // -- After the websocket disconnects we kill the stream:

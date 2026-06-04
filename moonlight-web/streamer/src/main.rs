@@ -207,6 +207,28 @@ async fn main() {
             }
         }
     }
+
+    // Filter out addresses that should never be used for ICE:
+    // - Link-local (APIPA, 169.254.x.x): OS can't bind with explicit port range
+    // - Hyper-V/WSL virtual adapters (172.16-31.x.x): unreachable from outside,
+    //   waste candidate pairs and confuse remote peers
+    api_settings.set_ip_filter(Box::new(|ip: std::net::IpAddr| {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_link_local() {
+                    return false;
+                }
+                // Filter 172.16.0.0/12 — these are almost always Hyper-V/WSL/Docker
+                // virtual adapters on Windows that are unreachable externally.
+                let octets = v4.octets();
+                if octets[0] == 172 && (octets[1] & 0xF0) == 16 {
+                    return false;
+                }
+                true
+            }
+            std::net::IpAddr::V6(_) => true,
+        }
+    }));
     if let Some(mapping) = server_config.webrtc_nat_1to1 {
         let valid_ips: Vec<String> = mapping.ips.iter()
             .filter(|ip| {
@@ -655,6 +677,9 @@ impl StreamConnection {
             }
             // This should already be done
             StreamClientMessage::AuthenticateAndInit { .. } => {}
+            StreamClientMessage::ClientLog { log } => {
+                info!("[Client Log]:\n{log}");
+            }
         }
     }
 
