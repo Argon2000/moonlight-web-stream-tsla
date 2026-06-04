@@ -15,6 +15,11 @@ pub struct Config {
     pub data_path: String,
     #[serde(default = "default_bind_address")]
     pub bind_address: SocketAddr,
+    /// Optional second address to bind HTTPS on when a certificate is configured.
+    /// When set, `bind_address` serves plain HTTP and this address serves HTTPS.
+    /// When unset, `bind_address` serves HTTPS (or HTTP if no cert).
+    #[serde(default)]
+    pub bind_address_https: Option<SocketAddr>,
     #[serde(default = "moonlight_default_http_port_default")]
     pub moonlight_default_http_port: u16,
     #[serde(default = "default_pair_device_name")]
@@ -79,6 +84,7 @@ impl Default for Config {
             totp_secret: None,
             data_path: data_path_default(),
             bind_address: default_bind_address(),
+            bind_address_https: None,
             moonlight_default_http_port: moonlight_default_http_port_default(),
             webrtc_ice_servers: default_ice_servers(),
             webrtc_port_range: default_webrtc_port_range(),
@@ -105,10 +111,19 @@ fn moonlight_default_http_port_default() -> u16 {
 }
 
 fn default_ice_servers() -> Vec<RtcIceServer> {
-    vec![RtcIceServer {
-        urls: vec!["stun:stun.cloudflare.com:3478".to_owned()],
-        ..Default::default()
-    }]
+    vec![
+        RtcIceServer {
+            urls: vec![
+                "stun:stun.cloudflare.com:3478".to_owned(),
+                "stun:stun.l.google.com:19302".to_owned(),
+                "stun:stun1.l.google.com:3478".to_owned(),
+                "stun:stun2.l.google.com:19302".to_owned(),
+                "stun:stun3.l.google.com:3478".to_owned(),
+                "stun:stun4.l.google.com:19302".to_owned(),
+            ],
+            ..Default::default()
+        },
+    ]
 }
 fn default_network_types() -> Vec<WebRtcNetworkType> {
     vec![WebRtcNetworkType::Udp4]

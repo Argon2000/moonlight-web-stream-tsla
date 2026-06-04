@@ -14,12 +14,14 @@ https://youtu.be/whdvHChCQbg?si=WLcgPDclkdr8n41i
 - [Images](#images)
 - [Limitations](#limitations)
 - [Installation](#installation)
+  - [Windows (Easy Setup)](#windows-easy-setup)
+  - [Manual Setup](#manual-setup)
 - [Setup](#setup)
   - [Streaming to a Tesla Browser](#streaming-to-a-tesla-browser)
     - [Getting a free domain name](#getting-a-free-domain-name)
   - [Troubleshooting](#troubleshooting)
   - [Streaming over the Internet](#streaming-over-the-internet)
-  - [Configuring https](#configuring-https)
+  - [Configuring HTTPS](#configuring-https)
     - [Let's Encrypt (recommended)](#option-a-lets-encrypt-recommended-for-tesla--public-access)
     - [Self-signed certificate](#option-b-self-signed-certificate)
   - [Proxying via Apache 2](#proxying-via-apache-2)
@@ -51,13 +53,42 @@ https://youtu.be/whdvHChCQbg?si=WLcgPDclkdr8n41i
 
 1. Install [Sunshine](http://github.com/LizardByte/Sunshine/releases/tag/v2026.516.143833)
 
-2. Download the [compressed archive](https://www.patreon.com/posts/windows-linux-158842535) for your platform and uncompress it or [build it yourself](#building)
+2. Download the [compressed archive](https://www.patreon.com/posts/windows-linux-158842535) for your platform and extract it
 
-3. Run the "web-server" executable
+### Windows (Easy Setup)
 
-4. Change your [access credentials](#credentials) in the newly generated `server/config.json` (all changes require a restart)
+The included `setup.ps1` wizard handles everything interactively:
+- Detects your network configuration
+- Sets a password for the web interface
+- Configures port forwarding via UPnP
+- Adds Windows Firewall rules
+- Optionally obtains a free Let's Encrypt HTTPS certificate
+- Creates a scheduled task for automatic certificate renewal
+- Starts the server
 
-5. Go to `http://localhost:8080` and view the web interface. You can also change the [bind address](#bind-address).
+**Run as Administrator** (required for firewall rules and UPnP):
+
+```powershell
+# Right-click PowerShell → "Run as administrator", then:
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\setup.ps1
+```
+
+Or simply right-click `setup.ps1` → **Run with PowerShell** (it will self-elevate).
+
+Follow the prompts. The wizard will guide you through each step and explain what it is doing.
+
+> **Recommended port:** The wizard defaults to port **43780**. Avoid 80, 443, and 8080 — these are commonly restricted by ISPs and routers.
+
+> **HTTPS / Tesla access:** Choose option 1 (Let's Encrypt) in the certificate step. You need a domain name first — see [Getting a free domain name](#getting-a-free-domain-name).
+
+### Manual Setup
+
+1. Run the `web-server` executable
+
+2. Change your [access credentials](#credentials) in the generated `server/config.json` (requires restart)
+
+3. Go to `http://localhost:43780` and view the web interface
 
 ## Setup
 
@@ -98,7 +129,7 @@ Check your current public IP at [whatismyip.com](https://www.whatismyip.com/). Y
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| 8080 | TCP | Web interface (or whichever port you configured) |
+| 43780 | TCP | Web interface (or whichever port you configured) |
 | 40000–40100 | UDP | WebRTC media stream |
 
 > **Windows Firewall:** On some systems you may need to add inbound rules for UDP 40000–40100. Try temporarily disabling Windows Firewall to test if it's blocking traffic. If that helps, add the rules and re-enable it. Also make sure your network profile is set to **Private**.
@@ -121,8 +152,10 @@ Check your current public IP at [whatismyip.com](https://www.whatismyip.com/). Y
    Replace `12.34.56.78` with your actual public IP (only digits and dots, no `<` or `>`).
 
 3. **Forward ports in your router:**
-   - TCP 8080 → your PC's local IP (e.g. `192.168.1.50`)
+   - TCP 43780 → your PC's local IP (e.g. `192.168.1.50`)
    - UDP 40000–40100 → your PC's local IP
+
+   > **Tip:** The `setup.ps1` wizard can do this automatically via UPnP.
 
 4. **Use the Cloudflare / Google STUN server** and `udp4` only (already in the default config):
    ```json
@@ -134,7 +167,7 @@ Check your current public IP at [whatismyip.com](https://www.whatismyip.com/). Y
    }
    ```
 
-5. Access the web interface from your Tesla browser via `http://yourdomain.com:8080` — or with HTTPS on port 443 if you've [configured a certificate](#configuring-https).
+5. Access the web interface from your Tesla browser via `https://yourdomain.com:43780` — or on port 443 if you forwarded that.
 
 > **Note:** Some routers let you export a signed certificate directly. See [Configuring https](#configuring-https).
 
@@ -163,11 +196,11 @@ Check your current public IP at [whatismyip.com](https://www.whatismyip.com/). Y
 
 ### Streaming over the Internet
 
-1. Set the [bind address](#bind-address) to the one of your network and forward the web server port (default is 8080, http is 80, https is 443)
+1. Set the [bind address](#bind-address) to your network interface and forward the web server port
 
 ```json
 {
-    "bind_address": "192.168.1.1:80"
+    "bind_address": "192.168.1.100:43780"
 }
 ```
 
@@ -238,26 +271,22 @@ If you're using Windows Defender make sure to allow NAT Traversal. Important: If
 It might be helpful to look what kind of nat your pc is behind:
 - [Nat Checker](https://www.checkmynat.com/)
 
-### Configuring https
-You can configure https directly with the Moonlight Web Server.
+### Configuring HTTPS
+You can configure HTTPS directly with the Moonlight Web Server.
 
 #### Option A: Let's Encrypt (recommended for Tesla / public access)
 
-The included `acme-certificate` script automates obtaining a free, trusted SSL certificate from [Let's Encrypt](https://letsencrypt.org/). No third-party tools required.
+The included `setup.ps1` wizard handles this automatically on Windows. Run it and choose option 1 in the certificate step.
+
+For manual use, the `acme-certificate.ps1` script automates obtaining a free, trusted SSL certificate from [Let's Encrypt](https://letsencrypt.org/).
 
 **Prerequisites:**
 - A domain name pointing to your public IP (e.g. DDNS like `*.asuscomm.com` — see [Getting a free domain](#getting-a-free-domain-name))
-- Port 80 forwarded on your router to the server's local IP and port (e.g. `192.168.1.50:8080`)
+- Port 80 forwarded on your router to the server's local IP (the setup wizard can do this via UPnP)
 
-**Windows:**
+**Windows (standalone):**
 ```powershell
 .\acme-certificate.ps1
-```
-
-**Linux:**
-```bash
-chmod +x ./acme-certificate.sh
-./acme-certificate.sh
 ```
 
 The script will prompt for your domain and server URL, then automatically:
@@ -265,44 +294,22 @@ The script will prompt for your domain and server URL, then automatically:
 2. Request a certificate from Let's Encrypt
 3. Set up the HTTP-01 challenge via the server's API
 4. Wait for validation
-5. Save `server/cert.pem` and `server/key.pem`
+5. Save `server/cert.pem` and `server/key.pem` and update `server/config.json`
 
-After the script completes, add this to your `server/config.json` and restart:
-```json
-{
-    "certificate": {
-        "private_key_pem": "./server/key.pem",
-        "certificate_pem": "./server/cert.pem"
-    }
-}
-```
+> **Tip:** Use `-Staging` to test with Let's Encrypt's staging environment first to avoid rate limits.
 
-> **Tip:** Use `--staging` (or `-Staging` on Windows) to test with Let's Encrypt's staging environment first to avoid rate limits.
+##### Auto-renewal (Windows Task Scheduler)
 
-##### Auto-renewal with Windows Task Scheduler
-
-Let's Encrypt certificates expire after 90 days. Set up a scheduled task to renew automatically:
+The `setup.ps1` wizard creates this scheduled task automatically. To set it up manually:
 
 1. Open **Task Scheduler** → **Create Task**
 2. **General** tab: Name it `Moonlight Web Certificate Renewal`, check "Run whether user is logged on or not"
-3. **Triggers** tab: New → **On a schedule**, set to repeat every **60 days** (or weekly for safety)
+3. **Triggers** tab: New → **On a schedule**, repeat every **60 days**
 4. **Actions** tab: New →
    - Program: `powershell.exe`
-   - Arguments: `-ExecutionPolicy Bypass -File "C:\path\to\acme-certificate.ps1" -Domain "yourdomain.com" -ServerUrl "http://192.168.1.100:8080"`
-   - Start in: `C:\path\to\moonlight-web\` (directory containing the server)
+   - Arguments: `-ExecutionPolicy Bypass -File "C:\path\to\acme-certificate.ps1" -Domain "yourdomain.com" -ServerUrl "http://192.168.1.100:43780"`
+   - Start in: `C:\path\to\moonlight-web\`
 5. Click OK and enter your Windows password
-
-The script will overwrite `server/cert.pem` and `server/key.pem`. Restart the server after renewal (or add `Restart-Service` / process restart to the script).
-
-##### Auto-renewal on Linux (cron)
-
-```bash
-# Edit crontab
-crontab -e
-
-# Add (runs on the 1st of every other month at 3am):
-0 3 1 */2 * cd /path/to/moonlight-web && ./acme-certificate.sh --domain "yourdomain.com" --server "http://localhost:8080" && systemctl restart moonlight-web
-```
 
 #### Option B: Self-signed certificate
 
@@ -418,7 +425,7 @@ The address and port the website will run on
 
 ```json
 {
-    "bind_address": "127.0.0.1:8080"
+    "bind_address": "127.0.0.1:43780"
 }
 ```
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Obtains a Let's Encrypt SSL certificate using the server's built-in ACME challenge handler.
 
@@ -37,12 +37,33 @@ param(
 
     [string]$SessionToken = "",
 
-    [string]$OutputDir = "./server",
+    [string]$OutputDir = "",
 
     [switch]$Staging
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
+
+# Resolve OutputDir to an absolute path anchored to the script's own directory.
+# This prevents failures when the script is launched from a different working directory
+# (e.g. C:\WINDOWS\system32 when re-launched as Administrator via UAC).
+if (-not $OutputDir) { $OutputDir = "server" }
+if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
+    $OutputDir = Join-Path $PSScriptRoot $OutputDir
+}
+
+
+# Keep the window open on unhandled errors so the user can read the message.
+trap {
+    Write-Host ""
+    Write-Host "[ERROR] Script failed:" -ForegroundColor Red
+    Write-Host "  $_" -ForegroundColor Red
+    Write-Host ""
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkRed
+    Write-Host ""
+    Read-Host "Press Enter to close"
+    break
+}
 
 Write-Host "=== Moonlight Web ACME Certificate Tool ===" -ForegroundColor Cyan
 Write-Host ""
@@ -57,12 +78,28 @@ if (-not $Domain) {
 
 # Prompt for ServerUrl if not provided
 if (-not $ServerUrl) {
+    # Try to read bind_address from server/config.json
+    $defaultUrl = "http://localhost:43780"
+    $configPath = Join-Path $OutputDir "config.json"
+    if (Test-Path $configPath) {
+        try {
+            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+            if ($cfg.bind_address) {
+                # bind_address is "ip:port" — build a URL from it
+                $defaultUrl = "http://$($cfg.bind_address)"
+                Write-Host "  (Detected server address from config.json: $defaultUrl)" -ForegroundColor DarkGray
+            }
+        } catch {
+            # Ignore parse errors, fall back to default
+        }
+    }
+
     Write-Host ""
     Write-Host "Enter the URL of your Moonlight Web server (used to set the challenge token)." -ForegroundColor Yellow
-    Write-Host "  Example: http://192.168.1.100:8080" -ForegroundColor DarkGray
+    Write-Host "  Example: http://192.168.1.100:43780" -ForegroundColor DarkGray
     Write-Host "  Note: port 80 must be forwarded to this server on your router for Let's Encrypt validation." -ForegroundColor DarkGray
-    $URL = (Read-Host "Server URL [http://localhost:8080]").Trim()
-    $ServerUrl = if ($URL) { $URL } else { "http://localhost:8080" }
+    $URL = (Read-Host "Server URL [$defaultUrl]").Trim()
+    $ServerUrl = if ($URL) { $URL } else { $defaultUrl }
 }
 
 Write-Host ""
@@ -201,14 +238,15 @@ function Get-Nonce([string]$NewNonceUrl) {
 
 # Step 1: Generate or load account key
 $accountKeyPath = Join-Path $OutputDir "acme-account-key.xml"
-if (Test-Path $accountKeyPath) {
+$keyWasLoaded = Test-Path $accountKeyPath
+if ($keyWasLoaded) {
     Write-Host "[1/7] Loading existing account key..." -ForegroundColor Yellow
     $rsa = [System.Security.Cryptography.RSA]::Create()
     $rsa.FromXmlString((Get-Content $accountKeyPath -Raw))
 } else {
     Write-Host "[1/7] Generating new account key (RSA 2048)..." -ForegroundColor Yellow
     $rsa = [System.Security.Cryptography.RSA]::Create(2048)
-    $rsa.ToXmlString($true) | Set-Content $accountKeyPath
+    [System.IO.File]::WriteAllText($accountKeyPath, $rsa.ToXmlString($true), (New-Object System.Text.UTF8Encoding $true))
 }
 
 # Step 2: Get ACME directory
@@ -220,36 +258,115 @@ $newOrderUrl = $directory.newOrder
 
 # Step 3: Create/find account
 Write-Host "[3/7] Registering ACME account..." -ForegroundColor Yellow
-$nonce = Get-Nonce $newNonceUrl
-$accountPayload = @{
-    "termsOfServiceAgreed" = $true
+
+if ($keyWasLoaded) {
+    # Verify the loaded key is registered on THIS ACME endpoint (staging vs production are separate).
+    # If the key was registered elsewhere or the account was deleted, we must create a new key.
+    $nonce = Get-Nonce $newNonceUrl
+    $checkPayload = @{ "onlyReturnExisting" = $true }
+    $body = New-AcmeRequest -Url $newAccountUrl -Payload $checkPayload -Nonce $nonce -AccountKey $rsa
+    try {
+        $response = Invoke-WebRequest -Uri $newAccountUrl -Method Post -Body $body `
+            -ContentType "application/jose+json" -UseBasicParsing
+        $accountUrl = $response.Headers["Location"].Trim()
+        Write-Host "  Existing account: $accountUrl"
+    } catch {
+        # Only discard the key if Let's Encrypt explicitly says the account doesn't exist.
+        # For any other error (bad nonce, network, JWS issue) re-throw so the user sees it.
+        $errBody = ""
+        try {
+            $stream = $_.Exception.Response.GetResponseStream()
+            $reader = New-Object System.IO.StreamReader($stream)
+            $errBody = $reader.ReadToEnd()
+            $reader.Close()
+        } catch {}
+        if ($errBody -notmatch "accountDoesNotExist") {
+            Write-Host "  ACME account check failed unexpectedly:" -ForegroundColor Red
+            Write-Host "  $errBody" -ForegroundColor Red
+            throw
+        }
+        Write-Host "  Loaded key has no account on this ACME server. Generating a new key..." -ForegroundColor Yellow
+        Remove-Item $accountKeyPath -Force
+        $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+        [System.IO.File]::WriteAllText($accountKeyPath, $rsa.ToXmlString($true), (New-Object System.Text.UTF8Encoding $true))
+        $keyWasLoaded = $false
+    }
 }
-$body = New-AcmeRequest -Url $newAccountUrl -Payload $accountPayload -Nonce $nonce -AccountKey $rsa
-$response = Invoke-WebRequest -Uri $newAccountUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
-$accountUrl = $response.Headers["Location"]
-Write-Host "  Account: $accountUrl"
+
+if (-not $keyWasLoaded) {
+    $nonce = Get-Nonce $newNonceUrl
+    $accountPayload = @{ "termsOfServiceAgreed" = $true }
+    $body = New-AcmeRequest -Url $newAccountUrl -Payload $accountPayload -Nonce $nonce -AccountKey $rsa
+    $response = Invoke-WebRequest -Uri $newAccountUrl -Method Post -Body $body `
+        -ContentType "application/jose+json" -UseBasicParsing
+    $accountUrl = $response.Headers["Location"].Trim()
+    Write-Host "  New account: $accountUrl"
+    Write-Host "  Waiting for account to propagate..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 8
+}
 
 # Step 4: Create order
 Write-Host "[4/7] Creating certificate order for $Domain..." -ForegroundColor Yellow
-$nonce = $response.Headers["Replay-Nonce"]
 $orderPayload = @{
     "identifiers" = @(
         @{ "type" = "dns"; "value" = $Domain }
     )
 }
-$body = New-AcmeRequest -Url $newOrderUrl -Payload $orderPayload -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
-$response = Invoke-WebRequest -Uri $newOrderUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
-$order = $response.Content | ConvertFrom-Json
-$orderUrl = $response.Headers["Location"]
+$order = $null
+$orderUrl = $null
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    $nonce = Get-Nonce $newNonceUrl
+    $body = New-AcmeRequest -Url $newOrderUrl -Payload $orderPayload -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
+    try {
+        $response = Invoke-WebRequest -Uri $newOrderUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
+        $order = $response.Content | ConvertFrom-Json
+        $orderUrl = $response.Headers["Location"].Trim()
+        break
+    } catch {
+        $errBody = ""
+        try {
+            $stream = $_.Exception.Response.GetResponseStream()
+            $reader = New-Object System.IO.StreamReader($stream)
+            $errBody = $reader.ReadToEnd()
+            $reader.Close()
+        } catch {}
+        if ($errBody -match "accountDoesNotExist" -and $attempt -lt 5) {
+            Write-Host "  Account not yet propagated, retrying in 3s (attempt $attempt/5)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+        } else {
+            throw
+        }
+    }
+}
 Write-Host "  Order status: $($order.status)"
 
 # Step 5: Process authorization (HTTP-01 challenge)
 Write-Host "[5/7] Setting up HTTP-01 challenge..." -ForegroundColor Yellow
 $authzUrl = $order.authorizations[0]
-$nonce = $response.Headers["Replay-Nonce"]
-$body = New-AcmeRequest -Url $authzUrl -Payload "" -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
-$response = Invoke-WebRequest -Uri $authzUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
-$authz = $response.Content | ConvertFrom-Json
+$authz = $null
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    $nonce = Get-Nonce $newNonceUrl
+    $body = New-AcmeRequest -Url $authzUrl -Payload "" -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
+    try {
+        $response = Invoke-WebRequest -Uri $authzUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
+        $authz = $response.Content | ConvertFrom-Json
+        break
+    } catch {
+        $errBody = ""
+        try {
+            $stream = $_.Exception.Response.GetResponseStream()
+            $reader = New-Object System.IO.StreamReader($stream)
+            $errBody = $reader.ReadToEnd()
+            $reader.Close()
+        } catch {}
+        if ($errBody -match "No such authorization" -and $attempt -lt 5) {
+            Write-Host "  Authorization not yet propagated, retrying in 3s (attempt $attempt/5)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+        } else {
+            throw
+        }
+    }
+}
 
 $httpChallenge = $authz.challenges | Where-Object { $_.type -eq "http-01" }
 if (-not $httpChallenge) {
@@ -270,8 +387,18 @@ try {
     Invoke-ServerApi -Method "PUT" -Path "/api/acme/challenge/$token" -Body $keyAuth
     Write-Host "  Challenge set successfully!" -ForegroundColor Green
 } catch {
-    Write-Error "Failed to set challenge on server: $_"
-    Write-Host "  Make sure the server is running and your session token is valid."
+    $errMsg = $_.ToString()
+    Write-Error "Failed to set challenge on server: $errMsg"
+    if ($errMsg -match "501") {
+        Write-Host ""
+        Write-Host "  501 Not Implemented means your web-server binary is outdated." -ForegroundColor Red
+        Write-Host "  The ACME API endpoints were added in a recent build." -ForegroundColor Red
+        Write-Host "  Please replace web-server.exe with a current build and restart." -ForegroundColor Red
+    } elseif ($errMsg -match "404") {
+        Write-Host "  Make sure the server is running at: $ServerUrl" -ForegroundColor Yellow
+    } else {
+        Write-Host "  Make sure the server is running and reachable at: $ServerUrl" -ForegroundColor Yellow
+    }
     exit 1
 }
 
@@ -291,7 +418,7 @@ try {
 # Step 6: Notify ACME server we're ready
 Write-Host "[6/7] Notifying ACME server to validate..." -ForegroundColor Yellow
 $challengeUrl = $httpChallenge.url
-$nonce = $response.Headers["Replay-Nonce"]
+$nonce = Get-Nonce $newNonceUrl
 $body = New-AcmeRequest -Url $challengeUrl -Payload @{} -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
 $response = Invoke-WebRequest -Uri $challengeUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
 
@@ -299,9 +426,24 @@ $response = Invoke-WebRequest -Uri $challengeUrl -Method Post -Body $body -Conte
 $maxAttempts = 30
 for ($i = 0; $i -lt $maxAttempts; $i++) {
     Start-Sleep -Seconds 2
-    $nonce = $response.Headers["Replay-Nonce"]
-    $body = New-AcmeRequest -Url $authzUrl -Payload "" -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
-    $response = Invoke-WebRequest -Uri $authzUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
+    $pollOk = $false
+    for ($retry = 1; $retry -le 5; $retry++) {
+        $nonce = Get-Nonce $newNonceUrl
+        $body = New-AcmeRequest -Url $authzUrl -Payload "" -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
+        try {
+            $response = Invoke-WebRequest -Uri $authzUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
+            $authz = $response.Content | ConvertFrom-Json
+            $pollOk = $true
+            break
+        } catch {
+            $errBody = ""
+            try { $stream = $_.Exception.Response.GetResponseStream(); $reader = New-Object System.IO.StreamReader($stream); $errBody = $reader.ReadToEnd(); $reader.Close() } catch {}
+            if ($errBody -match "accountDoesNotExist" -and $retry -lt 5) {
+                Start-Sleep -Seconds 3
+            } else { throw }
+        }
+    }
+    if (-not $pollOk) { throw "Authorization poll failed after retries" }
     $authz = $response.Content | ConvertFrom-Json
     Write-Host "  Authorization status: $($authz.status)" -NoNewline
     if ($authz.status -eq "valid") {
@@ -333,7 +475,7 @@ $csrDer = $certReq.CreateSigningRequest()
 $csrB64 = ConvertTo-Base64Url $csrDer
 
 # Finalize
-$nonce = $response.Headers["Replay-Nonce"]
+$nonce = Get-Nonce $newNonceUrl
 $finalizePayload = @{ "csr" = $csrB64 }
 $body = New-AcmeRequest -Url $order.finalize -Payload $finalizePayload -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
 $response = Invoke-WebRequest -Uri $order.finalize -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
@@ -343,7 +485,7 @@ $order = $response.Content | ConvertFrom-Json
 for ($i = 0; $i -lt $maxAttempts; $i++) {
     if ($order.status -eq "valid") { break }
     Start-Sleep -Seconds 2
-    $nonce = $response.Headers["Replay-Nonce"]
+    $nonce = Get-Nonce $newNonceUrl
     $body = New-AcmeRequest -Url $orderUrl -Payload "" -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
     $response = Invoke-WebRequest -Uri $orderUrl -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
     $order = $response.Content | ConvertFrom-Json
@@ -356,7 +498,7 @@ if ($order.status -ne "valid") {
 }
 
 # Download certificate
-$nonce = $response.Headers["Replay-Nonce"]
+$nonce = Get-Nonce $newNonceUrl
 $body = New-AcmeRequest -Url $order.certificate -Payload "" -Nonce $nonce -AccountKey $rsa -Kid $accountUrl
 $response = Invoke-WebRequest -Uri $order.certificate -Method Post -Body $body -ContentType "application/jose+json" -UseBasicParsing
 # .Content is a byte[] in PS5.1 with -UseBasicParsing; decode to string
@@ -380,12 +522,60 @@ Write-Host "=== Certificate obtained successfully! ===" -ForegroundColor Green
 Write-Host "  Certificate: $certPath"
 Write-Host "  Private Key: $keyPath"
 Write-Host ""
-Write-Host "To use this certificate, update your server/config.json:" -ForegroundColor Cyan
-Write-Host @"
-  "certificate": {
-    "certificate_pem": "$($certPath.Replace('\', '/'))",
-    "private_key_pem": "$($keyPath.Replace('\', '/'))"
-  }
-"@
+
+# Update config.json with the certificate paths (create certificate block if missing)
+$configPath = Join-Path $OutputDir "config.json"
+$certAbsPath = $certPath  # already an absolute path
+$keyAbsPath  = $keyPath   # already an absolute path
+
+if (Test-Path $configPath) {
+    try {
+        $json = [System.IO.File]::ReadAllText($configPath, [System.Text.Encoding]::UTF8)
+
+        if ($json -match '"certificate"\s*:\s*\{') {
+            # Block already exists with an object value — update just the two values in-place, preserving all formatting
+            $certEscaped = $certAbsPath -replace '\\', '\\\\'
+            $keyEscaped  = $keyAbsPath  -replace '\\', '\\\\'
+            $json = $json -replace '("certificate_pem"\s*:\s*)"[^"]*"', ('$1"' + $certEscaped + '"')
+            $json = $json -replace '("private_key_pem"\s*:\s*)"[^"]*"', ('$1"' + $keyEscaped + '"')
+            Write-Host "  Updating certificate config in $configPath..." -ForegroundColor Yellow
+        } elseif ($json -match '"certificate"\s*:\s*null') {
+            # Null placeholder — replace the whole null value with the certificate object
+            $certEscaped = $certAbsPath -replace '\\', '\\\\'
+            $keyEscaped  = $keyAbsPath  -replace '\\', '\\\\'
+            $indentMatch = [regex]::Match($json, '(?m)^(\s+)"')
+            $indent = if ($indentMatch.Success) { $indentMatch.Groups[1].Value } else { '  ' }
+            $inner  = $indent + '  '
+            $block  = "{`r`n${inner}`"certificate_pem`": `"$certEscaped`",`r`n${inner}`"private_key_pem`": `"$keyEscaped`"`r`n${indent}}"
+            $json = $json -replace '"certificate"\s*:\s*null', ('"certificate": ' + $block)
+            Write-Host "  Adding certificate config to $configPath..." -ForegroundColor Yellow
+        } else {
+            # No certificate block yet — insert one before the root closing brace.
+            # Detect indentation from the first quoted key in the file.
+            $certEscaped = $certAbsPath -replace '\\', '\\\\'
+            $keyEscaped  = $keyAbsPath  -replace '\\', '\\\\'
+            $indentMatch = [regex]::Match($json, '(?m)^(\s+)"')
+            $indent = if ($indentMatch.Success) { $indentMatch.Groups[1].Value } else { '  ' }
+            $inner  = $indent + '  '
+            $block  = ",`r`n${indent}`"certificate`": {`r`n${inner}`"certificate_pem`": `"$certEscaped`",`r`n${inner}`"private_key_pem`": `"$keyEscaped`"`r`n${indent}}"
+            # Insert immediately before the final closing brace
+            $lastBrace = $json.LastIndexOf('}')
+            $json = $json.Substring(0, $lastBrace).TrimEnd() + $block + "`r`n}"
+            Write-Host "  Adding certificate config to $configPath..." -ForegroundColor Yellow
+        }
+
+        [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $true))
+        Write-Host "  Config updated. Restart the server to apply the certificate." -ForegroundColor Green
+    } catch {
+        Write-Warning "Could not update config.json automatically: $_"
+        Write-Host "  Add this to $configPath manually:" -ForegroundColor Cyan
+        Write-Host "  `"certificate`": { `"certificate_pem`": `"$certAbsPath`", `"private_key_pem`": `"$keyAbsPath`" }"
+    }
+} else {
+    Write-Host "  config.json not found at $configPath" -ForegroundColor Yellow
+    Write-Host "  Add this to your config.json manually:" -ForegroundColor Cyan
+    Write-Host "  `"certificate`": { `"certificate_pem`": `"$certAbsPath`", `"private_key_pem`": `"$keyAbsPath`" }"
+}
 Write-Host ""
-Write-Host "Then restart the server." -ForegroundColor Cyan
+Read-Host "Press Enter to close"
+exit 0

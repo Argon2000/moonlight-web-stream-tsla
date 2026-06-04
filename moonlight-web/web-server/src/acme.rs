@@ -13,7 +13,11 @@ use tokio::sync::RwLock;
 /// Win-ACME creates .well-known/acme-challenge/{token} under the site root.
 const ACME_CHALLENGE_DIR: &str = "./.well-known/acme-challenge";
 
-/// In-memory store for ACME HTTP-01 challenge tokens.
+/// Maximum allowed key authorization length (token.thumbprint is ~87 chars)
+const MAX_KEY_AUTH_LEN: usize = 256;
+/// Maximum number of pending challenges stored in memory at once
+const MAX_CHALLENGES: usize = 10;
+
 /// Key: token (the filename in .well-known/acme-challenge/{token})
 /// Value: key authorization (token.thumbprint)
 pub type AcmeChallengeStore = Arc<RwLock<HashMap<String, String>>>;
@@ -69,9 +73,16 @@ async fn put_challenge(
     body: web::Bytes,
     store: Data<AcmeChallengeStore>,
 ) -> impl Responder {
+    if body.len() > MAX_KEY_AUTH_LEN {
+        return HttpResponse::BadRequest().body("Key authorization too long");
+    }
     let key_auth = String::from_utf8_lossy(&body).to_string();
+    let mut store = store.write().await;
+    if store.len() >= MAX_CHALLENGES && !store.contains_key(token.as_str()) {
+        return HttpResponse::TooManyRequests().body("Challenge store full");
+    }
     info!("[ACME] Set challenge: {} -> {}...", token.as_str(), &key_auth[..key_auth.len().min(30)]);
-    store.write().await.insert(token.to_string(), key_auth);
+    store.insert(token.to_string(), key_auth);
     HttpResponse::Ok().body("Challenge set")
 }
 

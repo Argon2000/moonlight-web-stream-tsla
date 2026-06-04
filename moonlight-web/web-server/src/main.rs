@@ -63,7 +63,7 @@ async fn exit() -> Result<(), anyhow::Error> {
 async fn main2() -> Result<(), anyhow::Error> {
     // Load Config
     const CONFIG_PATH: &str = "./server/config.json";
-    let config = read_or_default::<Config>(CONFIG_PATH).await;
+    let config = read_or_default::<Config>(CONFIG_PATH).await?;
     if config.credentials.as_deref() == Some("default") {
         info!("Enter your credentials in the config (server/config.json)");
 
@@ -91,10 +91,11 @@ async fn main2() -> Result<(), anyhow::Error> {
     let config = Data::new(config);
 
     // Load Data
-    let data = read_or_default::<ApiData>(&config.data_path).await;
+    let data = read_or_default::<ApiData>(&config.data_path).await?;
     let data = RuntimeApiData::load(&config, data).await;
 
     let bind_address = config.bind_address;
+    let bind_address_https = config.bind_address_https;
     let acme_store = Data::new(new_challenge_store());
     let server = HttpServer::new({
         let config = config.clone();
@@ -120,8 +121,6 @@ async fn main2() -> Result<(), anyhow::Error> {
     });
 
     if let Some(certificate) = config.certificate.as_ref() {
-        info!("[Server]: Running Https Server with ssl tls");
-
         let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())
             .expect("failed to create ssl tls acceptor");
         builder
@@ -131,7 +130,19 @@ async fn main2() -> Result<(), anyhow::Error> {
             .set_certificate_chain_file(&certificate.certificate_pem)
             .expect("failed to set certificate");
 
-        server.bind_openssl(bind_address, builder)?.run().await?;
+        if let Some(https_addr) = bind_address_https {
+            // Dual binding: plain HTTP on bind_address, HTTPS on bind_address_https
+            info!("[Server]: Running dual-bind — HTTP on {bind_address}, HTTPS on {https_addr}");
+            server
+                .bind(bind_address)?
+                .bind_openssl(https_addr, builder)?
+                .run()
+                .await?;
+        } else {
+            // Single binding: HTTPS only on bind_address
+            info!("[Server]: Running Https Server with ssl tls");
+            server.bind_openssl(bind_address, builder)?.run().await?;
+        }
     } else {
         server.bind(bind_address)?.run().await?;
     }
@@ -139,12 +150,30 @@ async fn main2() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn read_or_default<T>(path: impl AsRef<Path>) -> T
+async fn read_or_default<T>(path: impl AsRef<Path>) -> Result<T, anyhow::Error>
 where
     T: DeserializeOwned + Serialize + Default,
 {
     match fs::read_to_string(path.as_ref()).await {
-        Ok(value) => serde_json::from_str(&value).expect("invalid file"),
+        Ok(value) => serde_json::from_str(&value).map_err(|err| {
+            // serde_json gives 1-based line/column — extract the offending line for context
+            let line_no = err.line();
+            let col_no  = err.column();
+            let src_line = value
+                .lines()
+                .nth(line_no.saturating_sub(1))
+                .unwrap_or("");
+            let caret = " ".repeat(col_no.saturating_sub(1)) + "^";
+            anyhow::anyhow!(
+                "'{}' contains invalid JSON at line {}, column {}:\n\n  {}\n  {}\n\n{}\n\nFix the file and restart.",
+                path.as_ref().display(),
+                line_no,
+                col_no,
+                src_line,
+                caret,
+                err,
+            )
+        }),
         Err(err) if err.kind() == ErrorKind::NotFound => {
             let value = T::default();
 
@@ -159,8 +188,8 @@ where
                 .await
                 .expect("failed to write default file");
 
-            value
+            Ok(value)
         }
-        Err(err) => panic!("failed to read file: {err}"),
+        Err(err) => Err(anyhow::anyhow!("failed to read '{}': {}", path.as_ref().display(), err)),
     }
 }

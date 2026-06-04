@@ -154,9 +154,10 @@ foreach($target in $targets) {
     $itemsToZip = @($binaryPaths) + "$outputDir/static"
     if ($target -clike "*windows*") {
         $itemsToZip += "$moonlightRoot/acme-certificate.ps1"
-    } else {
-        $itemsToZip += "$moonlightRoot/acme-certificate.sh"
-    }
+        $itemsToZip += "$moonlightRoot/setup.ps1"
+    }# else {
+    #    $itemsToZip += "$moonlightRoot/acme-certificate.sh"
+    #}
     $archiveName = "$outputDir/moonlight-web-$target"
 
     if ($target -clike "*windows*") {
