@@ -487,6 +487,12 @@ export class CanvasRenderer {
     private workerAvgGapMs: number = -1;
     private workerMaxGapMs: number = -1;
 
+    setStatsEnabled(enabled: boolean) {
+        if (this.renderWorker) {
+            this.renderWorker.postMessage({ type: enabled ? 'enable-stats' : 'disable-stats' })
+        }
+    }
+
     public onFirstFrameAfterResize(frame: VideoFrame) {
         if(!this.canvas) return
         // Calculate aspect ratios

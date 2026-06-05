@@ -222,6 +222,10 @@ class ViewerApp implements Component {
         this.statsOverlay.setPeerGetter(() => this.stream?.getPeer() ?? null)
         this.statsOverlay.setStreamGetter(() => this.stream)
         this.statsOverlay.setWorkerDiagnosticsGetter(() => this.getWorkerDiagnostics())
+        this.statsOverlay.setStatsEnabledCallback((enabled) => {
+            this.stream?.setStatsEnabled(enabled)
+            this.canvasRenderer?.setStatsEnabled(enabled)
+        })
         if (settings.showStreamStats) {
             this.statsOverlay.show()
         }

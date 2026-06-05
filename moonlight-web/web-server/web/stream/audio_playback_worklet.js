@@ -39,6 +39,10 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
 
             if (data.type === 'pcm') {
                 this._handlePcm(data);
+            } else if (data.type === 'enable-stats') {
+                this.statsEnabled = true;
+            } else if (data.type === 'disable-stats') {
+                this.statsEnabled = false;
             } else if (data.type === 'pcm-port') {
                 // Receive dedicated port from main thread; decode worker sends directly here
                 this.pcmPort = data.port;
@@ -156,6 +160,7 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
     }
 
     _maybeStats() {
+        if (!this.statsEnabled) return;
         // Send stats every ~1 second (375 process calls at 128 samples / 48kHz)
         if (++this.lastStatsAt >= 375) {
             this.lastStatsAt = 0;

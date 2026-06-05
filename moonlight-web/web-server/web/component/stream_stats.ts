@@ -33,6 +33,7 @@ export class StreamStatsOverlay implements Component {
     private peerGetter: (() => RTCPeerConnection | null) | null = null
     private streamGetter: (() => Stream | null) | null = null
     private workerDiagnosticsGetter: (() => WorkerDiagnosticsSnapshot | null) | null = null
+    private statsEnabledCallback: ((enabled: boolean) => void) | null = null
 
     // Cached DOM elements for fast updates (avoid querySelector each tick)
     private elVideoRes = document.createElement("span")
@@ -46,6 +47,7 @@ export class StreamStatsOverlay implements Component {
     private elFramesDropped = document.createElement("span")
     private elNackPli = document.createElement("span")
     private elFreeze = document.createElement("span")
+    private elFreezeDetail = document.createElement("span")
     private elAssembly = document.createElement("span")
     private elAudioBitrate = document.createElement("span")
     private elAudioPackets = document.createElement("span")
@@ -74,6 +76,11 @@ export class StreamStatsOverlay implements Component {
     private prevJitterBufferDelay = 0
     private prevJitterBufferEmittedCount = 0
     private prevCanvasArrivedCount = 0
+    private prevFreezeCount = 0
+    private freezeCorrelationJitterSpikes = 0  // freezes that coincided with jitter spike
+    private freezeCorrelationReceiveDrop = 0   // freezes that coincided with frame receive rate drop
+    private prevAvgJbDelayMs = 0  // rolling avg jitter buffer delay for spike detection
+    private rollingFrameRateReceived = 0  // EMA of frames received per second
 
     constructor() {
         this.root.classList.add("stream-stats-overlay")
@@ -108,6 +115,7 @@ export class StreamStatsOverlay implements Component {
             ["Frames Dropped", this.elFramesDropped],
             ["NACK / PLI", this.elNackPli],
             ["Freeze", this.elFreeze],
+            ["Freeze Detail", this.elFreezeDetail],
             ["Frame Assembly", this.elAssembly],
             ["Audio Bitrate", this.elAudioBitrate],
             ["Audio Messages", this.elAudioPackets],
@@ -148,8 +156,13 @@ export class StreamStatsOverlay implements Component {
         this.workerDiagnosticsGetter = getter
     }
 
+    setStatsEnabledCallback(cb: (enabled: boolean) => void) {
+        this.statsEnabledCallback = cb
+    }
+
     show() {
         this.root.style.display = ""
+        this.statsEnabledCallback?.(true)
         this.scheduleUpdate()
         // Auto-refresh every 2 seconds while visible
         if (!this.intervalId) {
@@ -159,6 +172,7 @@ export class StreamStatsOverlay implements Component {
 
     hide() {
         this.root.style.display = "none"
+        this.statsEnabledCallback?.(false)
         if (this.intervalId) {
             clearInterval(this.intervalId)
             this.intervalId = null
@@ -191,6 +205,8 @@ export class StreamStatsOverlay implements Component {
     }
 
     private async update() {
+        if (!this.isVisible()) return
+
         const peer = this.peerGetter?.()
         if (!peer) return
 
@@ -309,6 +325,52 @@ export class StreamStatsOverlay implements Component {
         this.elFreeze.textContent = freezeCount > 0
             ? `${freezeCount} events, ${(totalFreezesDuration * 1000).toFixed(0)} ms total`
             : `0`
+
+        // Freeze cause correlation: detect if freezes coincide with jitter buffer spikes
+        // A "jitter spike" means the avg jitter buffer delay this interval is >2× the rolling avg.
+        const jbDelayDeltaForFreeze   = jitterBufferDelay        - this.prevJitterBufferDelay
+        const jbEmittedDeltaForFreeze = jitterBufferEmittedCount - this.prevJitterBufferEmittedCount
+        const curAvgJbMs = jbEmittedDeltaForFreeze > 0 ? (jbDelayDeltaForFreeze / jbEmittedDeltaForFreeze * 1000) : 0
+        const freezeDelta = freezeCount - this.prevFreezeCount
+
+        // Detect receive-rate drop: if framesReceived/s this interval is <50% of rolling avg
+        const framesReceivedDelta = framesReceived - this.prevFramesReceived
+        const curFrameRate = elapsed > 0 ? framesReceivedDelta / elapsed : 0
+        if (this.rollingFrameRateReceived === 0 && curFrameRate > 0) {
+            this.rollingFrameRateReceived = curFrameRate
+        } else if (curFrameRate > 0) {
+            this.rollingFrameRateReceived = this.rollingFrameRateReceived * 0.8 + curFrameRate * 0.2
+        }
+        const receiveRateDropped = curFrameRate > 0 && this.rollingFrameRateReceived > 0 && curFrameRate < this.rollingFrameRateReceived * 0.5
+
+        if (freezeDelta > 0) {
+            if (this.prevAvgJbDelayMs > 0 && curAvgJbMs > this.prevAvgJbDelayMs * 2) {
+                this.freezeCorrelationJitterSpikes += freezeDelta
+            }
+            if (receiveRateDropped) {
+                this.freezeCorrelationReceiveDrop += freezeDelta
+            }
+        }
+        this.prevFreezeCount = freezeCount
+        // Update rolling average (EMA with α=0.2)
+        if (curAvgJbMs > 0) {
+            this.prevAvgJbDelayMs = this.prevAvgJbDelayMs === 0
+                ? curAvgJbMs
+                : this.prevAvgJbDelayMs * 0.8 + curAvgJbMs * 0.2
+        }
+        const avgFreezeDurationMs = freezeCount > 0 ? ((totalFreezesDuration * 1000) / freezeCount).toFixed(0) : "0"
+        // Determine likely cause label
+        let freezeCause = "unknown (browser/decode stall?)"
+        if (freezeCount > 0) {
+            const jitterPct = Math.round(this.freezeCorrelationJitterSpikes / freezeCount * 100)
+            const receivePct = Math.round(this.freezeCorrelationReceiveDrop / freezeCount * 100)
+            if (jitterPct > 50) freezeCause = "network jitter bursts"
+            else if (receivePct > 50) freezeCause = "encoder/sender stall"
+            else freezeCause = "browser decode/render stall"
+        }
+        this.elFreezeDetail.textContent = freezeCount > 0
+            ? `avg ${avgFreezeDurationMs} ms, cause: ${freezeCause} | jitter: ${this.freezeCorrelationJitterSpikes}/${freezeCount}, rx-drop: ${this.freezeCorrelationReceiveDrop}/${freezeCount}`
+            : `—`
 
         this.elVideoRes.textContent = videoWidth > 0 ? `${videoWidth}×${videoHeight}` : "—"
         this.elCodec.textContent = codec || "—"

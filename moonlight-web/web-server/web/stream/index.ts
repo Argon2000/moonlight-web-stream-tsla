@@ -155,6 +155,9 @@ export class Stream {
     private audioGapSampleCounter: number = 0
     private readonly AUDIO_GAP_SAMPLE_EVERY = 8
 
+    // When false all stats collection is skipped (stats overlay is hidden)
+    private statsEnabled: boolean = false
+
     constructor(api: Api, hostId: number, appId: number, settings: StreamSettings, supportedVideoFormats: VideoCodecSupport, viewerScreenSize: [number, number]) {
         this.api = api
         this.hostId = hostId
@@ -1000,7 +1003,7 @@ export class Stream {
         this.audioBytesReceived += packet.byteLength;
 
         // Sample inter-packet timing every N packets (cheap: integer modulo + branch).
-        if ((++this.audioGapSampleCounter & (this.AUDIO_GAP_SAMPLE_EVERY - 1)) === 0) {
+        if (this.statsEnabled && (++this.audioGapSampleCounter & (this.AUDIO_GAP_SAMPLE_EVERY - 1)) === 0) {
             const now = event.timeStamp || 0;
             if (now > 0 && this.lastAudioPacketAt > 0) {
                 const sampledGapMs = (now - this.lastAudioPacketAt) / this.AUDIO_GAP_SAMPLE_EVERY;
@@ -1212,6 +1215,14 @@ export class Stream {
 
     getPeer(): RTCPeerConnection | null {
         return this.peer
+    }
+
+    setStatsEnabled(enabled: boolean) {
+        this.statsEnabled = enabled
+        // Propagate to audio worklet so it stops/starts its periodic postMessage
+        if (this.audioWorkletNode) {
+            this.audioWorkletNode.port.postMessage({ type: enabled ? 'enable-stats' : 'disable-stats' })
+        }
     }
 
     getAudioDiagnostics(): StreamAudioDiagnostics {

@@ -10,7 +10,9 @@ type StopStreamMessage = { type: "stopStream" }
 type FrameMessage = { type: "frame"; frame: VideoFrame }
 type ResizeMessage = { type: "resize"; width: number; height: number }
 type StopMessage = { type: "stop" }
-type WorkerMessage = InitMessage | SetStreamMessage | StopStreamMessage | FrameMessage | ResizeMessage | StopMessage
+type EnableStatsMessage = { type: "enable-stats" }
+type DisableStatsMessage = { type: "disable-stats" }
+type WorkerMessage = InitMessage | SetStreamMessage | StopStreamMessage | FrameMessage | ResizeMessage | StopMessage | EnableStatsMessage | DisableStatsMessage
 
 // Message the worker sends back to the main thread
 export type WorkerStatsMessage = {
@@ -69,6 +71,9 @@ let lastDrawnTimestamp: number = -1
 let workerDrawn = 0
 let workerDropped = 0
 
+// Stats reporting enabled flag — controlled by main thread
+let statsEnabled = false
+
 // Arrival-timing accumulators (reset each stats interval)
 let arrivalCount = 0
 let lastArrivalMs = -1
@@ -87,7 +92,8 @@ let srcGapCount = 0
 function clearPresentationQueue() { /* no queue — draw immediately */ }
 
 function scheduleFrame(frame: VideoFrame) {
-    // Track inter-frame arrival gap
+    // Track inter-frame arrival gap (only when stats enabled)
+    if (statsEnabled) {
     const nowMs = typeof frame.timestamp === "number" && Number.isFinite(frame.timestamp)
         ? frame.timestamp / 1000
         : Date.now()
@@ -100,6 +106,7 @@ function scheduleFrame(frame: VideoFrame) {
     }
     lastArrivalMs = nowMs
     arrivalCount++
+    }
 
     // Monotonic guard — discard exact duplicate timestamps only
     if (frame.timestamp === lastDrawnTimestamp) {
@@ -109,7 +116,7 @@ function scheduleFrame(frame: VideoFrame) {
     }
 
     // Track source frame timestamp gaps (encoder pacing)
-    if (lastFrameTimestamp >= 0 && frame.timestamp > lastFrameTimestamp) {
+    if (statsEnabled && lastFrameTimestamp >= 0 && frame.timestamp > lastFrameTimestamp) {
         const srcGap = (frame.timestamp - lastFrameTimestamp) / 1000 // μs → ms
         if (srcGap < srcGapMin) srcGapMin = srcGap
         if (srcGap > srcGapMax) srcGapMax = srcGap
@@ -132,6 +139,7 @@ const statsMsg: WorkerStatsMessage = {
 
 // Post stats back to main thread every 2s (matches overlay refresh; reduces GC pressure)
 setInterval(() => {
+    if (!statsEnabled) return
     statsMsg.drawn = workerDrawn
     statsMsg.dropped = workerDropped
     statsMsg.arrived = arrivalCount
@@ -302,4 +310,7 @@ workerSelf.onmessage = (event: MessageEvent<WorkerMessage>) => {
         canvas = null
         ctx = null
     }
+
+    if (data.type === "enable-stats") { statsEnabled = true }
+    if (data.type === "disable-stats") { statsEnabled = false }
 }
