@@ -75,8 +75,8 @@ function Get-UPnPGateway {
             if ($rtGw -and $rtGw -ne "0.0.0.0") { $gatewayIp = $rtGw }
         } catch {}
 
-        # Collect LOCATION headers from a UDP socket, reading all responses until timeout.
-        function Collect-SSDP([System.Net.Sockets.UdpClient]$sock, [string]$dest, [int]$dport, [string]$st) {
+        # Get LOCATION headers from a UDP socket, reading all responses until timeout.
+        function Get-SSDP([System.Net.Sockets.UdpClient]$sock, [string]$dest, [int]$dport, [string]$st) {
             $msg = "M-SEARCH * HTTP/1.1`r`nHOST: ${dest}:${dport}`r`nMAN: `"ssdp:discover`"`r`nMX: 3`r`nST: $st`r`n`r`n"
             $bytes = [Text.Encoding]::ASCII.GetBytes($msg)
             $null = $sock.Send($bytes, $bytes.Length, $dest, $dport)
@@ -107,7 +107,7 @@ function Get-UPnPGateway {
                     $udp = New-Object System.Net.Sockets.UdpClient
                     $udp.Client.Bind([Net.IPEndPoint]::new([Net.IPAddress]::Parse($LocalIp), 0))
                     $udp.Client.ReceiveTimeout = 3500
-                    foreach ($l in (Collect-SSDP $udp "239.255.255.250" 1900 $st)) {
+                    foreach ($l in (Get-SSDP $udp "239.255.255.250" 1900 $st)) {
                         if (-not $seen.ContainsKey($l)) { $seen[$l] = $true; $allLocs += $l }
                     }
                     $udp.Close()
@@ -120,7 +120,7 @@ function Get-UPnPGateway {
                 $udp = New-Object System.Net.Sockets.UdpClient
                 if ($LocalIp) { $udp.Client.Bind([Net.IPEndPoint]::new([Net.IPAddress]::Parse($LocalIp), 0)) }
                 $udp.Client.ReceiveTimeout = 3500
-                foreach ($l in (Collect-SSDP $udp $gatewayIp 1900 "upnp:rootdevice")) {
+                foreach ($l in (Get-SSDP $udp $gatewayIp 1900 "upnp:rootdevice")) {
                     if (-not $seen.ContainsKey($l)) { $seen[$l] = $true; $allLocs += $l }
                 }
                 $udp.Close()
@@ -678,7 +678,6 @@ $serverRunning = Start-ServerProcess
 
 Write-Step "Step 9: SSL Certificate (HTTPS)"
 
-$setupSsl = $false
 if ($domain) {
     Write-Info "HTTPS is recommended for Tesla access and required for Keyboard Lock."
     Write-Host ""
@@ -692,7 +691,6 @@ if ($domain) {
 
     switch ($sslChoice) {
         "1" {
-            $setupSsl = $true
             Write-Host ""
             Write-Host "  ┌─ Important ─────────────────────────────────────────────────┐" -ForegroundColor Yellow
             Write-Host "  │ Let's Encrypt validates by making a request to port 80.     │" -ForegroundColor Yellow
@@ -821,7 +819,6 @@ if ($domain) {
                     Write-Ok "HTTPS will be served on port $webPort (single binding — router forward $webPort → $webPort)"
                 }
 
-                $setupSsl = $true
                 Write-Ok "Certificate configured."
             } else {
                 Write-Warn "Certificate files not found. Skipping HTTPS."
