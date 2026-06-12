@@ -3,6 +3,7 @@
 //! Provides a tray icon with context menu for:
 //! - Show/Hide console window
 //! - Toggle "Start with Windows" (registry-based)
+//! - Toggle "Start minimized" (registry-based)
 //! - Exit the application
 
 use log::info;
@@ -26,6 +27,7 @@ static CONSOLE_VISIBLE: AtomicBool = AtomicBool::new(true);
 const APP_NAME: &str = "Moonlight Web Tesla";
 const REGISTRY_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const REGISTRY_VALUE: &str = "MoonlightWebTesla";
+const REGISTRY_APP_KEY: &str = r"Software\MoonlightWebTesla";
 
 /// Check if "Start with Windows" is currently enabled in the registry.
 fn is_autostart_enabled() -> bool {
@@ -41,6 +43,7 @@ fn is_autostart_enabled() -> bool {
 }
 
 /// Enable or disable "Start with Windows" via registry.
+/// The command includes the exe path with its directory as working dir.
 fn set_autostart(enabled: bool) {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
     use winreg::RegKey;
@@ -49,7 +52,7 @@ fn set_autostart(enabled: bool) {
     if enabled {
         if let Ok(key) = hkcu.open_subkey_with_flags(REGISTRY_KEY, KEY_WRITE) {
             let exe_path = std::env::current_exe()
-                .map(|p| format!("\"{}\"", p.display()))
+                .map(|p| format!("\"{}\" --minimized", p.display()))
                 .unwrap_or_default();
             let _ = key.set_value(REGISTRY_VALUE, &exe_path);
             info!("[Tray] Enabled Start with Windows: {}", exe_path);
@@ -60,28 +63,68 @@ fn set_autostart(enabled: bool) {
     }
 }
 
-fn toggle_console() {
+/// Check if "Start minimized" is enabled (stored in app registry key).
+pub fn is_start_minimized() -> bool {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(key) = hkcu.open_subkey(REGISTRY_APP_KEY) {
+        key.get_value::<u32, _>("StartMinimized").unwrap_or(0) == 1
+    } else {
+        false
+    }
+}
+
+fn set_start_minimized(enabled: bool) {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = hkcu
+        .create_subkey_with_flags(REGISTRY_APP_KEY, KEY_WRITE)
+        .map(|(k, _)| k);
+    if let Ok(key) = key {
+        let _ = key.set_value("StartMinimized", &(if enabled { 1u32 } else { 0u32 }));
+        info!("[Tray] Start minimized: {}", enabled);
+    }
+}
+
+/// Hide the console window (called from main on start-minimized).
+pub fn hide_console() {
     unsafe {
         let hwnd = GetConsoleWindow();
         if hwnd.is_invalid() {
             return;
         }
-        if CONSOLE_VISIBLE.load(Ordering::Relaxed) {
-            // Fully hide the console: remove from taskbar + hide window
-            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let new_style = (ex_style & !(WS_EX_APPWINDOW.0 as isize)) | (WS_EX_TOOLWINDOW.0 as isize);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
-            let _ = ShowWindow(hwnd, SW_HIDE);
-            CONSOLE_VISIBLE.store(false, Ordering::Relaxed);
-        } else {
-            // Restore: show window + restore taskbar appearance
-            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let new_style = (ex_style | (WS_EX_APPWINDOW.0 as isize)) & !(WS_EX_TOOLWINDOW.0 as isize);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = SetForegroundWindow(hwnd);
-            CONSOLE_VISIBLE.store(true, Ordering::Relaxed);
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let new_style = (ex_style & !(WS_EX_APPWINDOW.0 as isize)) | (WS_EX_TOOLWINDOW.0 as isize);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        CONSOLE_VISIBLE.store(false, Ordering::Relaxed);
+    }
+}
+
+fn show_console() {
+    unsafe {
+        let hwnd = GetConsoleWindow();
+        if hwnd.is_invalid() {
+            return;
         }
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let new_style = (ex_style | (WS_EX_APPWINDOW.0 as isize)) & !(WS_EX_TOOLWINDOW.0 as isize);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetForegroundWindow(hwnd);
+        CONSOLE_VISIBLE.store(true, Ordering::Relaxed);
+    }
+}
+
+fn toggle_console() {
+    if CONSOLE_VISIBLE.load(Ordering::Relaxed) {
+        hide_console();
+    } else {
+        show_console();
     }
 }
 
@@ -154,14 +197,17 @@ pub fn spawn_tray(exit_signal: Arc<AtomicBool>) {
 fn run_tray_loop(exit_signal: Arc<AtomicBool>) {
     let icon = create_icon();
 
-    let show_hide = MenuItem::new("Hide Console", true, None);
+    let show_hide_label = if CONSOLE_VISIBLE.load(Ordering::Relaxed) { "Hide Console" } else { "Show Console" };
+    let show_hide = MenuItem::new(show_hide_label, true, None);
     let autostart = CheckMenuItem::new("Start with Windows", true, is_autostart_enabled(), None);
+    let start_min = CheckMenuItem::new("Start minimized", true, is_start_minimized(), None);
     let separator = PredefinedMenuItem::separator();
     let quit = MenuItem::new("Exit", true, None);
 
     let menu = Menu::new();
     let _ = menu.append(&show_hide);
     let _ = menu.append(&autostart);
+    let _ = menu.append(&start_min);
     let _ = menu.append(&separator);
     let _ = menu.append(&quit);
 
@@ -174,6 +220,7 @@ fn run_tray_loop(exit_signal: Arc<AtomicBool>) {
 
     let show_hide_id = show_hide.id().clone();
     let autostart_id = autostart.id().clone();
+    let start_min_id = start_min.id().clone();
     let quit_id = quit.id().clone();
 
     // Event loop — tray-icon requires a Win32 message pump to display the context menu
@@ -207,6 +254,10 @@ fn run_tray_loop(exit_signal: Arc<AtomicBool>) {
                 let new_state = !is_autostart_enabled();
                 set_autostart(new_state);
                 autostart.set_checked(new_state);
+            } else if event.id() == &start_min_id {
+                let new_state = !is_start_minimized();
+                set_start_minimized(new_state);
+                start_min.set_checked(new_state);
             } else if event.id() == &quit_id {
                 exit_signal.store(true, Ordering::Relaxed);
                 std::process::exit(0);

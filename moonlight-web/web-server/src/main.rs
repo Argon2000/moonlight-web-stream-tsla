@@ -47,6 +47,22 @@ async fn main() {
         let _ = SetConsoleTitleW(w!("Moonlight Web Tesla"));
     }
 
+    // Set working directory to the exe's folder so relative paths (./server/config.json) work
+    // regardless of how the process was launched (e.g. from Start with Windows / registry).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let _ = std::env::set_current_dir(dir);
+        }
+    }
+
+    // If --minimized flag is passed (or "Start minimized" is enabled), hide console immediately
+    #[cfg(windows)]
+    let start_minimized = std::env::args().any(|a| a == "--minimized") || tray::is_start_minimized();
+    #[cfg(windows)]
+    if start_minimized {
+        tray::hide_console();
+    }
+
     #[cfg(debug_assertions)]
     let log_level = LevelFilter::Debug;
     #[cfg(not(debug_assertions))]
