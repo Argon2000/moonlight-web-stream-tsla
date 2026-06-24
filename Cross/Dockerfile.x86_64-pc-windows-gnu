@@ -1,4 +1,4 @@
-ARG CROSS_BASE_IMAGE
+ARG CROSS_BASE_IMAGE=scratch
 FROM $CROSS_BASE_IMAGE AS base
 
 # -- Overwrite the openssl finder so we just don't do anything (it'll just error out even though we have the lib)

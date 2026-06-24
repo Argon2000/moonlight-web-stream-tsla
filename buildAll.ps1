@@ -139,7 +139,16 @@ Set-Location $moonlightRoot
 
 foreach($target in $targets) {
     Write-Output "------------- Starting Build for $target -------------"
-    $messages = cross build --release --target $target --message-format=json | ForEach-Object { $_ | ConvertFrom-Json }
+    $messages = cross build --release --target $target --message-format=json 2>&1 | ForEach-Object {
+        # cross/docker writes progress lines to stderr; merge them to stdout so PowerShell
+        # doesn't treat them as errors (red RemoteException). Non-JSON lines are progress
+        # messages — print them directly; JSON lines are cargo metadata to collect.
+        if ($_ -is [System.Management.Automation.ErrorRecord]) {
+            Write-Host $_.Exception.Message
+            return
+        }
+        try { $_ | ConvertFrom-Json } catch { Write-Host $_; return }
+    }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

@@ -18,7 +18,7 @@
     "dev": "npm-watch build-light",
     "build": "npm run generate-bindings && npm run build-light",
     "build-light": "tsc && npm run copy-static",
-    "generate-bindings": "cargo test export_bindings --package common",
+    "generate-bindings": "cargo test export_bindings --package common 2>&1",
     "copy-static": "cpx \"web/**/*.{html,json,css,svg,png,wav,mjs,wasm,js}\" dist/"
   },
   "license": "GPL-3.0-or-later",
