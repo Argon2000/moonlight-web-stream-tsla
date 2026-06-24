@@ -433,6 +433,7 @@ if (Test-Path $configPath) {
         web_path_prefix = ""
         certificate = $null
         streamer_path = "./streamer"
+        external_url = $null
     }
 }
 
@@ -665,6 +666,8 @@ if (`$result -eq "OK") { Write-Host "DuckDNS updated" } else { Write-Host "DuckD
 
 if ($domain) {
     Write-Ok "Domain: $domain"
+    # Save the external_url so the tray and other features use the domain
+    $config | Add-Member -NotePropertyName "external_url" -NotePropertyValue "https://$domain" -Force
 }
 
 # ─── Step 8: Save config & start server (needed for ACME) ────────────────────

@@ -119,7 +119,7 @@ class ViewerApp implements Component {
         setSidebar(this.sidebar)
 
         // Configure stream
-        const settings = getLocalStreamSettings() ?? defaultStreamSettings()
+        const settings = getLocalStreamSettings(hostId) ?? defaultStreamSettings()
 
         let browserWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0)
         let browserHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0)

@@ -115,17 +115,19 @@ async fn main2() -> Result<(), anyhow::Error> {
 
         return Ok(());
     }
-    if let Some(nat) = &config.webrtc_nat_1to1 {
-        for ip in &nat.ips {
-            if ip.contains('<') || ip.contains('>') {
-                warn!(
-                    "Placeholder NAT IP '{}' found in config — streaming over the Internet will likely fail. \
-                     Replace it with your real public IP (check https://whatismyip.com). See README for details.",
-                    ip
-                );
-            }
-        }
+
+    // Validate config — warnings are logged, errors abort startup
+    let (warnings, errors) = config.validate();
+    for w in &warnings {
+        warn!("{}", w);
     }
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "Config validation failed (server/config.json):\n  • {}",
+            errors.join("\n  • ")
+        );
+    }
+
     let creds = ApiCredentials::new(
         config.credentials.clone(),
         config.totp_secret.clone(),
@@ -135,6 +137,25 @@ async fn main2() -> Result<(), anyhow::Error> {
     let credentials = Data::new(creds);
 
     let config = Data::new(config);
+
+    // Tell the tray the server URL so "Open Web UI" / "Copy URL" work
+    #[cfg(windows)]
+    {
+        let url = if let Some(ext) = config.external_url.as_deref() {
+            ext.to_string()
+        } else {
+            let (scheme, addr) = if let Some(https_addr) = config.bind_address_https {
+                ("https", https_addr)
+            } else if config.certificate.is_some() {
+                ("https", config.bind_address)
+            } else {
+                ("http", config.bind_address)
+            };
+            // Use the configured IP (not localhost) so it works on LAN
+            format!("{scheme}://{addr}")
+        };
+        tray::set_server_url(url);
+    }
 
     // Load Data
     let data = read_or_default::<ApiData>(&config.data_path).await?;
@@ -168,18 +189,18 @@ async fn main2() -> Result<(), anyhow::Error> {
 
     if let Some(certificate) = config.certificate.as_ref() {
         let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())
-            .expect("failed to create ssl tls acceptor");
+            .map_err(|e| anyhow::anyhow!("failed to create SSL/TLS acceptor: {e}"))?;
         // Restrict ALPN to HTTP/1.1 only — actix-ws WebSocket upgrades require HTTP/1.1
         // and will break if the browser negotiates HTTP/2 (which mozilla_intermediate advertises).
         builder
             .set_alpn_protos(b"\x08http/1.1")
-            .expect("failed to set ALPN protos");
+            .map_err(|e| anyhow::anyhow!("failed to set ALPN protos: {e}"))?;
         builder
             .set_private_key_file(&certificate.private_key_pem, SslFiletype::PEM)
-            .expect("failed to set private key");
+            .map_err(|e| anyhow::anyhow!("failed to load SSL private key '{}': {e}", certificate.private_key_pem))?;
         builder
             .set_certificate_chain_file(&certificate.certificate_pem)
-            .expect("failed to set certificate");
+            .map_err(|e| anyhow::anyhow!("failed to load SSL certificate '{}': {e}", certificate.certificate_pem))?;
 
         if let Some(https_addr) = bind_address_https {
             // Dual binding: plain HTTP on bind_address, HTTPS on bind_address_https
@@ -228,16 +249,17 @@ where
         Err(err) if err.kind() == ErrorKind::NotFound => {
             let value = T::default();
 
-            let value_str = serde_json::to_string_pretty(&value).expect("failed to serialize file");
+            let value_str = serde_json::to_string_pretty(&value)
+                .map_err(|e| anyhow::anyhow!("failed to serialize default for '{}': {e}", path.as_ref().display()))?;
 
             if let Some(parent) = path.as_ref().parent() {
                 fs::create_dir_all(parent)
                     .await
-                    .expect("failed to create directories to file");
+                    .map_err(|e| anyhow::anyhow!("failed to create directories for '{}': {e}", path.as_ref().display()))?;
             }
             fs::write(path.as_ref(), value_str)
                 .await
-                .expect("failed to write default file");
+                .map_err(|e| anyhow::anyhow!("failed to write default file '{}': {e}", path.as_ref().display()))?;
 
             Ok(value)
         }

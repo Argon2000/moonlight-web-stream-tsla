@@ -2,6 +2,7 @@ body {
     background-color: rgb(48, 48, 48);
     font-size: 1.2rem;
     font-family: sans-serif;
+    margin: 0;
 }
 
 /* Prevent pull down refresh when Streaming */
@@ -128,7 +129,7 @@ input[type=password]:hover:enabled,
 input[type="number"]:hover:enabled {
     transition: all 0.2s;
     background-color: rgba(0, 0, 0, 0);
-    border-color: rgb(255, 255, 255, 0.7);
+    border-color: rgba(255, 255, 255, 0.7);
 }
 
 textarea:disabled,
@@ -161,7 +162,7 @@ select option {
 
 .select-button:hover {
     background-color: rgba(255, 255, 255, 0.2);
-    border-color: rgb(255, 255, 255, 0.7);
+    border-color: rgba(255, 255, 255, 0.7);
     box-shadow: none;
 }
 

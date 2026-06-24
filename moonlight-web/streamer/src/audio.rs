@@ -9,10 +9,11 @@ use moonlight_common::stream::{
 };
 use ogg::{PacketWriteEndInfo, PacketWriter};
 use tokio::sync::mpsc::{self, Sender, UnboundedSender};
+use tokio::sync::Notify;
 use tokio::time::{self, Duration};
 use webrtc::{
     api::media_engine::{MIME_TYPE_OPUS, MediaEngine},
-    data_channel::RTCDataChannel,
+    data_channel::{RTCDataChannel, data_channel_state::RTCDataChannelState},
     rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType},
 };
 
@@ -37,14 +38,16 @@ pub fn register_audio_codecs(media_engine: &mut MediaEngine) -> Result<(), webrt
 
 pub struct OpusTrackSampleAudioDecoder {
     channel: Arc<RTCDataChannel>,
+    channel_open: Arc<Notify>,
     sender: Option<Sender<Bytes>>,
     config: Option<OpusMultistreamConfig>,
 }
 
 impl OpusTrackSampleAudioDecoder {
-    pub fn new(channel: Arc<RTCDataChannel>) -> Self {
+    pub fn new(channel: Arc<RTCDataChannel>, channel_open: Arc<Notify>) -> Self {
         Self {
             channel,
+            channel_open,
             sender: None,
             config: None,
         }
@@ -73,7 +76,7 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
     ) -> i32 {
         info!("[Stream] Audio setup: {audio_config:?}, {stream_config:?}");
 
-        const SUPPORTED_SAMPLE_RATES: &[u32] = &[80000, 12000, 16000, 24000, 48000];
+        const SUPPORTED_SAMPLE_RATES: &[u32] = &[8000, 12000, 16000, 24000, 48000];
         if !SUPPORTED_SAMPLE_RATES.contains(&stream_config.sample_rate) {
             warn!(
                 "[Stream] Audio could have problems because of the sample rate, Selected: {}, Expected one of: {SUPPORTED_SAMPLE_RATES:?}",
@@ -94,8 +97,15 @@ impl AudioDecoder for OpusTrackSampleAudioDecoder {
         self.sender = Some(sender);
 
         let channel = self.channel.clone();
+        let channel_open = self.channel_open.clone();
 
         tokio::spawn(async move {
+            // Wait for the DataChannel to be open before sending anything.
+            // With pre-emptive stream start, audio setup may happen before ICE connects.
+            if channel.ready_state() != RTCDataChannelState::Open {
+                channel_open.notified().await;
+            }
+
             let (chunk_tx, mut chunk_rx) = mpsc::unbounded_channel::<Bytes>();
             let mut writer = PacketWriter::new(VecSender(chunk_tx));
             let serial = 12345;

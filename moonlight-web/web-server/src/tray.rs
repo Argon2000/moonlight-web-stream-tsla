@@ -1,14 +1,15 @@
 //! Windows system tray integration.
 //!
 //! Provides a tray icon with context menu for:
+//! - Open Web UI / Copy Local URL
 //! - Show/Hide console window
 //! - Toggle "Start with Windows" (registry-based)
 //! - Toggle "Start minimized" (registry-based)
 //! - Exit the application
 
-use log::info;
+use log::{info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tray_icon::{
     TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, CheckMenuItem},
@@ -28,6 +29,14 @@ const APP_NAME: &str = "Moonlight Web Tesla";
 const REGISTRY_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const REGISTRY_VALUE: &str = "MoonlightWebTesla";
 const REGISTRY_APP_KEY: &str = r"Software\MoonlightWebTesla";
+
+/// The server URL, set from main after config is loaded.
+static SERVER_URL: OnceLock<String> = OnceLock::new();
+
+/// Set the server URL for "Open Web UI" and "Copy Local URL" tray actions.
+pub fn set_server_url(url: String) {
+    let _ = SERVER_URL.set(url);
+}
 
 /// Check if "Start with Windows" is currently enabled in the registry.
 fn is_autostart_enabled() -> bool {
@@ -128,7 +137,7 @@ fn toggle_console() {
     }
 }
 
-fn create_icon() -> Icon {
+fn create_icon() -> Result<Icon, tray_icon::BadIcon> {
     // 32x32 RGBA icon - simple moonlight circle (dark ring, white center, dark cross)
     let size: u32 = 32;
     let mut rgba = vec![0u8; (size * size * 4) as usize];
@@ -174,7 +183,7 @@ fn create_icon() -> Icon {
         }
     }
 
-    Icon::from_rgba(rgba, size, size).expect("failed to create tray icon")
+    Icon::from_rgba(rgba, size, size)
 }
 
 /// Spawn the system tray on a dedicated thread.
@@ -190,34 +199,79 @@ pub fn spawn_tray(exit_signal: Arc<AtomicBool>) {
     }
 
     std::thread::spawn(move || {
-        run_tray_loop(exit_signal);
+        if let Err(e) = run_tray_loop(exit_signal) {
+            warn!("[Tray] Failed to run system tray: {e}");
+        }
     });
 }
 
-fn run_tray_loop(exit_signal: Arc<AtomicBool>) {
-    let icon = create_icon();
+fn open_web_ui() {
+    if let Some(url) = SERVER_URL.get() {
+        if let Err(e) = std::process::Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .spawn()
+        {
+            warn!("[Tray] Failed to open browser: {e}");
+        }
+    }
+}
 
+fn copy_url_to_clipboard() {
+    if let Some(url) = SERVER_URL.get() {
+        use std::io::Write;
+        match std::process::Command::new("clip")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(url.as_bytes());
+                    drop(stdin);
+                }
+                let _ = child.wait();
+            }
+            Err(e) => warn!("[Tray] Failed to copy URL to clipboard: {e}"),
+        }
+    }
+}
+
+fn run_tray_loop(exit_signal: Arc<AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {
+    let icon = create_icon().map_err(|e| format!("failed to create tray icon: {e}"))?;
+
+    let open_ui = MenuItem::new("Open Web UI", true, None);
+    let copy_url = MenuItem::new("Copy Local URL", true, None);
+    let separator1 = PredefinedMenuItem::separator();
     let show_hide_label = if CONSOLE_VISIBLE.load(Ordering::Relaxed) { "Hide Console" } else { "Show Console" };
     let show_hide = MenuItem::new(show_hide_label, true, None);
     let autostart = CheckMenuItem::new("Start with Windows", true, is_autostart_enabled(), None);
     let start_min = CheckMenuItem::new("Start minimized", true, is_start_minimized(), None);
-    let separator = PredefinedMenuItem::separator();
+    let separator2 = PredefinedMenuItem::separator();
     let quit = MenuItem::new("Exit", true, None);
 
     let menu = Menu::new();
+    let _ = menu.append(&open_ui);
+    let _ = menu.append(&copy_url);
+    let _ = menu.append(&separator1);
     let _ = menu.append(&show_hide);
     let _ = menu.append(&autostart);
     let _ = menu.append(&start_min);
-    let _ = menu.append(&separator);
+    let _ = menu.append(&separator2);
     let _ = menu.append(&quit);
 
+    let tooltip = match SERVER_URL.get() {
+        Some(url) => format!("{APP_NAME} — {url}"),
+        None => APP_NAME.to_string(),
+    };
+
     let _tray = TrayIconBuilder::new()
-        .with_tooltip(APP_NAME)
+        .with_tooltip(&tooltip)
         .with_icon(icon)
         .with_menu(Box::new(menu))
         .build()
-        .expect("failed to build tray icon");
+        .map_err(|e| format!("failed to build tray icon: {e}"))?;
 
+    let open_ui_id = open_ui.id().clone();
+    let copy_url_id = copy_url.id().clone();
     let show_hide_id = show_hide.id().clone();
     let autostart_id = autostart.id().clone();
     let start_min_id = start_min.id().clone();
@@ -242,7 +296,11 @@ fn run_tray_loop(exit_signal: Arc<AtomicBool>) {
 
         // Process all pending menu events after dispatching
         while let Ok(event) = menu_rx.try_recv() {
-            if event.id() == &show_hide_id {
+            if event.id() == &open_ui_id {
+                open_web_ui();
+            } else if event.id() == &copy_url_id {
+                copy_url_to_clipboard();
+            } else if event.id() == &show_hide_id {
                 toggle_console();
                 let label = if CONSOLE_VISIBLE.load(Ordering::Relaxed) {
                     "Hide Console"
@@ -268,4 +326,6 @@ fn run_tray_loop(exit_signal: Arc<AtomicBool>) {
             break;
         }
     }
+
+    Ok(())
 }

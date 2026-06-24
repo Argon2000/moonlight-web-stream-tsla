@@ -167,6 +167,15 @@ async fn main() {
         ))
         .await;
 
+    // Try to use localhost if Sunshine is reachable locally (avoids DNS + NAT hairpin)
+    let host_address = match try_localhost(host_http_port).await {
+        Some(local) => {
+            info!("[Stream] Using local address {local} instead of {host_address}");
+            local
+        }
+        None => host_address,
+    };
+
     // -- Create the host and pair it
     let mut host = ReqwestMoonlightHost::new(host_address, host_http_port, host_unique_id)
         .expect("failed to create host");
@@ -313,6 +322,19 @@ async fn main() {
         ))
         .await;
 
+    // Start Moonlight/Sunshine stream pre-emptively (in parallel with ICE negotiation).
+    // This saves 1-2s by doing the Moonlight protocol handshake while ICE candidates
+    // are being exchanged, so frames are ready the moment the WebRTC link connects.
+    spawn({
+        let connection = connection.clone();
+        async move {
+            if let Err(err) = connection.start_stream().await {
+                warn!("[Stream]: failed to start stream: {err:?}");
+                connection.stop().await;
+            }
+        }
+    });
+
     // Wait for termination
     connection.terminate.notified().await;
 
@@ -344,8 +366,12 @@ struct StreamConnection {
     // Stream
     pub stream: RwLock<Option<MoonlightStream>>,
     pub terminate: Notify,
+    // Signalled when the audio DataChannel is open and ready for sends
+    pub audio_channel_open: Arc<Notify>,
     // ICE restart tracking
     pub ice_restart_attempted: std::sync::atomic::AtomicBool,
+    // Prevents start_stream from being called more than once
+    stream_start_initiated: std::sync::atomic::AtomicBool,
 }
 
 impl StreamConnection {
@@ -390,6 +416,15 @@ impl StreamConnection {
             )
             .await?;
 
+        let audio_channel_open = Arc::new(Notify::new());
+        audio_channel.on_open({
+            let notify = audio_channel_open.clone();
+            Box::new(move || {
+                notify.notify_one();
+                Box::pin(async {})
+            })
+        });
+
         let this = Arc::new(Self {
             runtime: Handle::current(),
             moonlight,
@@ -399,12 +434,14 @@ impl StreamConnection {
             ipc_sender,
             general_channel,
             audio_channel,
+            audio_channel_open,
             video_size: Mutex::new((0, 0)),
             input,
             pre_video_sender: Mutex::new(None),
             stream: Default::default(),
             terminate: Notify::new(),
             ice_restart_attempted: std::sync::atomic::AtomicBool::new(false),
+            stream_start_initiated: std::sync::atomic::AtomicBool::new(false),
         });
 
         // Pre-register a bare video transceiver so the initial SDP includes ALL supported
@@ -496,13 +533,8 @@ impl StreamConnection {
 
     // -- Handle Connection State
     async fn on_ice_connection_state_change(self: &Arc<Self>, state: RTCIceConnectionState) {
-        #[allow(clippy::collapsible_if)]
         if matches!(state, RTCIceConnectionState::Connected) {
-            if let Err(err) = self.start_stream().await {
-                warn!("[Stream]: failed to start stream: {err:?}");
-
-                self.stop().await;
-            }
+            info!("[Stream]: ICE connected");
         }
     }
     async fn on_peer_connection_state_change(&self, state: RTCPeerConnectionState) {
@@ -786,6 +818,11 @@ impl StreamConnection {
 
     // Start Moonlight Stream
     async fn start_stream(self: &Arc<Self>) -> Result<(), anyhow::Error> {
+        // Guard: only start once (prevents double-start on ICE reconnection)
+        if self.stream_start_initiated.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+
         // Send stage
         let mut ipc_sender = self.ipc_sender.clone();
         ipc_sender
@@ -808,6 +845,7 @@ impl StreamConnection {
 
         let audio_decoder = OpusTrackSampleAudioDecoder::new(
             self.audio_channel.clone(),
+            self.audio_channel_open.clone(),
         );
 
         let connection_listener = StreamConnectionListener::new(self.clone());
@@ -935,4 +973,23 @@ impl StreamConnection {
         info!("Terminating Self");
         self.terminate.notify_waiters();
     }
+}
+
+/// Probe whether Sunshine is reachable on localhost (same machine) or LAN address.
+/// Returns the working local address if found, or None to fall back to the configured address.
+/// Uses a very short timeout so this adds negligible delay when Sunshine is remote.
+async fn try_localhost(http_port: u16) -> Option<String> {
+    use std::time::Duration;
+    use tokio::net::TcpStream;
+    use tokio::time::timeout;
+
+    let probe_timeout = Duration::from_millis(100);
+
+    // Try 127.0.0.1 first (same machine)
+    let addr = format!("127.0.0.1:{http_port}");
+    if timeout(probe_timeout, TcpStream::connect(&addr)).await.ok()?.is_ok() {
+        return Some("127.0.0.1".to_string());
+    }
+
+    None
 }

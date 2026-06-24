@@ -61,7 +61,7 @@ impl RuntimeApiHost {
         }
 
         if changed {
-            let _ = data.file_writer.try_send(());
+            data.request_save();
         }
     }
 }
@@ -73,12 +73,17 @@ pub struct HostCache {
 }
 
 pub struct RuntimeApiData {
-    // TODO: make this private, make the save fn internal, only expose fn which uses this filer_writer sender to try_send on it
-    pub(crate) file_writer: Sender<()>,
+    file_writer: Sender<()>,
     pub(crate) hosts: RwLock<Slab<Mutex<RuntimeApiHost>>>,
 }
 
 impl RuntimeApiData {
+    /// Signal that data has changed and should be persisted to disk.
+    /// Non-blocking: if a save is already pending, the request is coalesced.
+    pub fn request_save(&self) {
+        let _ = self.file_writer.try_send(());
+    }
+
     pub async fn load(config: &Config, data: ApiData) -> Data<Self> {
         info!("Loading hosts");
 

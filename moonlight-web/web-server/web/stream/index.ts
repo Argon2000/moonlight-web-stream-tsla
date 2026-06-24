@@ -778,23 +778,43 @@ export class Stream {
      * which fails on Tesla browsers that kill the WS send path after the initial offer.
      */
     private iceGatheringResolve: (() => void) | null = null
+    private iceCandidateDebounceResolve: (() => void) | null = null
     private waitForIceGathering(): Promise<void> {
         return new Promise((resolve) => {
             if (!this.peer) { resolve(); return }
             if (this.peer.iceGatheringState === "complete") { resolve(); return }
 
-            // Resolve on timeout as a safety net — most candidates arrive within 2s.
-            const timeout = setTimeout(() => {
+            // Hard safety timeout — absolute maximum wait.
+            const maxTimeout = setTimeout(() => {
                 this.debugLog("ICE gathering timed out after 3s, sending what we have")
                 this.iceGatheringResolve = null
+                this.iceCandidateDebounceResolve = null
                 resolve()
             }, 3000)
+
+            // Candidate debounce: once we receive at least one candidate, start a short
+            // timer. If no more candidates arrive within 300ms, resolve early — host
+            // candidates (sufficient for localhost/LAN) arrive in <50ms, so this avoids
+            // waiting for slow STUN servers while still bundling all fast candidates.
+            let debounceTimer: ReturnType<typeof setTimeout> | null = null
+            this.iceCandidateDebounceResolve = () => {
+                if (debounceTimer) clearTimeout(debounceTimer)
+                debounceTimer = setTimeout(() => {
+                    clearTimeout(maxTimeout)
+                    this.iceGatheringResolve = null
+                    this.iceCandidateDebounceResolve = null
+                    this.debugLog("ICE gathering resolved (candidate debounce 300ms)")
+                    resolve()
+                }, 300)
+            }
 
             // The null-candidate event (end-of-candidates) is the most reliable
             // cross-browser signal that gathering finished. onIceCandidate will call this.
             this.iceGatheringResolve = () => {
-                clearTimeout(timeout)
+                clearTimeout(maxTimeout)
+                if (debounceTimer) clearTimeout(debounceTimer)
                 this.iceGatheringResolve = null
+                this.iceCandidateDebounceResolve = null
                 this.debugLog("ICE gathering complete (null candidate)")
                 resolve()
             }
@@ -886,6 +906,12 @@ export class Stream {
             return;
         }
         this.debugLog(`Local Ice Candidate gathered: ${candidateJson.candidate}`)
+
+        // Trigger debounce: once candidates stop arriving for 300ms, send the offer
+        // with whatever we have (host candidates are sufficient for LAN/localhost).
+        if (this.iceCandidateDebounceResolve) {
+            this.iceCandidateDebounceResolve()
+        }
 
         // We use non-trickle ICE: candidates are bundled into the SDP (via
         // waitForIceGathering) before the offer/answer is sent. Individual

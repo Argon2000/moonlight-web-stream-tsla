@@ -37,6 +37,8 @@ pub struct Config {
     pub certificate: Option<ConfigSsl>,
     #[serde(default = "default_streamer_path")]
     pub streamer_path: String,
+    #[serde(default)]
+    pub external_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -94,6 +96,7 @@ impl Default for Config {
             web_path_prefix: String::new(),
             certificate: None,
             streamer_path: default_streamer_path(),
+            external_url: None,
         }
     }
 }
@@ -144,4 +147,57 @@ fn default_pair_device_name() -> String {
 
 fn default_streamer_path() -> String {
     "./streamer".to_string()
+}
+
+impl Config {
+    /// Validate the configuration at startup.
+    /// Returns collected warnings (logged but non-fatal) and errors (fatal).
+    pub fn validate(&self) -> (Vec<String>, Vec<String>) {
+        let mut warnings = Vec::new();
+        let mut errors = Vec::new();
+
+        // NAT IP placeholders — warn only (local-only use is valid)
+        if let Some(nat) = &self.webrtc_nat_1to1 {
+            for ip in &nat.ips {
+                if ip.contains('<') || ip.contains('>') {
+                    warnings.push(format!(
+                        "Placeholder NAT IP '{}' — streaming over the Internet will likely fail. \
+                         Replace with your real public IP (check https://whatismyip.com).",
+                        ip
+                    ));
+                }
+            }
+        }
+
+        // Port range sanity
+        if let Some(range) = &self.webrtc_port_range {
+            if range.min == 0 {
+                errors.push("webrtc_port_range.min must be > 0".to_string());
+            }
+            if range.min > range.max {
+                errors.push(format!(
+                    "webrtc_port_range: min ({}) must be ≤ max ({})",
+                    range.min, range.max
+                ));
+            }
+        }
+
+        // Certificate files must exist when configured
+        if let Some(cert) = &self.certificate {
+            if !std::path::Path::new(&cert.private_key_pem).exists() {
+                errors.push(format!(
+                    "certificate.private_key_pem: file not found: {}",
+                    cert.private_key_pem
+                ));
+            }
+            if !std::path::Path::new(&cert.certificate_pem).exists() {
+                errors.push(format!(
+                    "certificate.certificate_pem: file not found: {}",
+                    cert.certificate_pem
+                ));
+            }
+        }
+
+        (warnings, errors)
+    }
 }

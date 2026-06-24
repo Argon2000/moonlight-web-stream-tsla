@@ -11,6 +11,7 @@ import { Host } from "./component/host/index.js";
 import { App } from "./api_bindings.js";
 import { getLocalStreamSettings, setLocalStreamSettings, StreamSettingsComponent } from "./component/settings_menu.js";
 import { setTouchContextMenuEnabled } from "./ios_right_click.js";
+import { TESLA_LOGO } from "./resources/index.js";
 
 async function startApp() {
     setTouchContextMenuEnabled(true)
@@ -83,7 +84,7 @@ class MainApp implements Component {
         this.headerBar.appendChild(this.headerRight)
 
         // Moonlight title / Dynamic Header
-        this.moonlightTextElement.innerHTML = "Moonlight Web"
+        this.moonlightTextElement.innerHTML = `<img width="80" height="80" src="${TESLA_LOGO}" alt="Moonlight Web">`
         this.moonlightTextElement.classList.add("header-title")
         this.headerCenter.appendChild(this.moonlightTextElement)
 
@@ -151,11 +152,8 @@ class MainApp implements Component {
                 newHost = await apiPutHost(this.api, host)
             } catch (e) {
                 if (e instanceof FetchError) {
-                    const response = e.getResponse()
-                    if (response && response.status == 400) {
-                        showErrorPopup("couldn't add host: not found")
-                        return
-                    }
+                    showErrorPopup(e.toUserMessage())
+                    return
                 }
                 throw e
             }
@@ -212,7 +210,7 @@ class MainApp implements Component {
 
         // Mount the new display and update header
         if (display == "hosts") {
-            this.moonlightTextElement.innerText = "Moonlight Web"
+            //this.moonlightTextElement.innerText = "Moonlight Web"
             this.backToHostsButton.style.display = "none"
             this.hostAddButton.style.display = "block"
             this.settingsButton.style.display = "block"
@@ -220,7 +218,7 @@ class MainApp implements Component {
             this.hostList.mount(this.appContent)
             pushAppState({ display: "hosts" })
         } else if (display == "games" && hostId != null) {
-            this.moonlightTextElement.innerText = "Games"
+            //this.moonlightTextElement.innerText = "Games"
             this.backToHostsButton.style.display = "block"
             this.hostAddButton.style.display = "none"
             this.settingsButton.style.display = "none"
@@ -233,7 +231,7 @@ class MainApp implements Component {
             this.refreshGameListActiveGame()
             pushAppState({ display: "games", hostId: this.gameList?.getHostId() })
         } else if (display == "settings") {
-            this.moonlightTextElement.innerText = "Settings"
+            //this.moonlightTextElement.innerText = "Settings"
             this.backToHostsButton.style.display = "block"
             this.hostAddButton.style.display = "none"
             this.settingsButton.style.display = "none"

@@ -64,25 +64,36 @@ export function defaultStreamSettings(): StreamSettings {
     }
 }
 
-export function getLocalStreamSettings(): StreamSettings | null {
+export function getLocalStreamSettings(hostId?: number): StreamSettings | null {
     let settings = null
     try {
-        const settingsLoadedJson = localStorage.getItem("mlSettings")
-        if (settingsLoadedJson == null) {
+        // Try host-specific settings first, then fall back to global
+        const hostKey = hostId != null ? `mlSettings_host_${hostId}` : null
+        const raw = (hostKey && localStorage.getItem(hostKey)) || localStorage.getItem("mlSettings")
+        if (raw == null) {
             return null
         }
 
-        const settingsLoaded = JSON.parse(settingsLoadedJson)
+        const settingsLoaded = JSON.parse(raw)
 
         settings = defaultStreamSettings()
         Object.assign(settings, settingsLoaded)
     } catch (e) {
+        if (hostId != null) {
+            localStorage.removeItem(`mlSettings_host_${hostId}`)
+        }
         localStorage.removeItem("mlSettings")
     }
     return settings
 }
-export function setLocalStreamSettings(settings?: StreamSettings) {
-    localStorage.setItem("mlSettings", JSON.stringify(settings))
+export function setLocalStreamSettings(settings?: StreamSettings, hostId?: number) {
+    const json = JSON.stringify(settings)
+    // Always save to global key
+    localStorage.setItem("mlSettings", json)
+    // Also save per-host if a hostId was provided
+    if (hostId != null) {
+        localStorage.setItem(`mlSettings_host_${hostId}`, json)
+    }
 }
 
 export type StreamSettingsChangeListener = (event: ComponentEvent<StreamSettingsComponent>) => void

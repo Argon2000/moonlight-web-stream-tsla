@@ -147,7 +147,7 @@ async fn put_host(
     };
     let mut host = host.lock().await;
 
-    let _ = data.file_writer.try_send(());
+    data.request_save();
 
     let Ok(detailed_host) = into_detailed_host(host_id, &mut host.moonlight).await else {
         return Either::Right(HttpResponse::InternalServerError().finish());
@@ -172,7 +172,7 @@ async fn delete_host(
     if host.is_none() {
         return HttpResponse::NotFound().finish();
     } else {
-        let _ = data.file_writer.try_send(());
+        data.request_save();
     }
 
     HttpResponse::Ok().finish()
@@ -259,7 +259,7 @@ async fn pair_host(
             return;
         };
 
-        let _ = data.file_writer.try_send(());
+        data.request_save();
 
         let detailed_host = match into_detailed_host(host_id as usize, &mut host.moonlight).await {
             Err(err) => {

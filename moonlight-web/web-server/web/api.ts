@@ -309,22 +309,40 @@ function buildRequest(api: Api, endpoint: string, method: string, init?: { respo
 
 export class FetchError extends Error {
     private response?: Response
+    private _errorType: "timeout" | "failed"
 
     constructor(type: "timeout", endpoint: string, method: string)
     constructor(type: "failed", endpoint: string, method: string, response: Response)
 
     constructor(type: "timeout" | "failed", endpoint: string, method: string, response?: Response) {
         if (type == "timeout") {
-            super(`failed to fetch ${method} at ${endpoint} because of timeout`)
+            super(`Request timed out: ${method.toUpperCase()} ${endpoint}`)
         } else {
-            super(`failed to fetch ${method} at ${endpoint} with code ${response?.status}`)
+            super(`Request failed (${response?.status}): ${method.toUpperCase()} ${endpoint}`)
         }
 
+        this._errorType = type
         this.response = response
     }
 
+    get errorType(): "timeout" | "failed" { return this._errorType }
+
     getResponse(): Response | null {
         return this.response ?? null
+    }
+
+    /** Return a user-friendly description of the error. */
+    toUserMessage(): string {
+        if (this._errorType === "timeout") {
+            return "Request timed out — check your network connection"
+        }
+        const status = this.response?.status
+        if (status === 404) return "Host not found or unreachable"
+        if (status === 400) return "Invalid request — check the address and port"
+        if (status === 401) return "Authentication required"
+        if (status === 403) return "Access denied"
+        if (status && status >= 500) return "Server error — try again later"
+        return this.message
     }
 }
 
@@ -342,7 +360,16 @@ export async function fetchApi(api: Api, endpoint: string, method: string = "get
         ), API_TIMEOUT)
     }
 
-    const response = await fetch(url, request)
+    let response: Response
+    try {
+        response = await fetch(url, request)
+    } catch (e) {
+        // Translate AbortError into the FetchError stored as the abort reason
+        if (timeoutAbort.signal.aborted && timeoutAbort.signal.reason instanceof FetchError) {
+            throw timeoutAbort.signal.reason
+        }
+        throw e
+    }
 
     if (!response.ok) {
         throw new FetchError("failed", endpoint, method, response)
@@ -357,6 +384,40 @@ export async function fetchApi(api: Api, endpoint: string, method: string = "get
 
         return json
     }
+}
+
+// ---------------------------------------------------------------------------
+// Retry wrapper — retries on timeout/network errors with exponential backoff.
+// Does NOT retry on 4xx (client errors).
+// ---------------------------------------------------------------------------
+
+async function fetchApiWithRetry(
+    api: Api,
+    endpoint: string,
+    method: string,
+    init?: { response?: "json" | "ignore" } & ApiFetchInit,
+    maxRetries: number = 2,
+): Promise<any> {
+    let lastError: unknown
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            return await fetchApi(api, endpoint, method, init as any)
+        } catch (e) {
+            lastError = e
+            // Don't retry on client errors (4xx)
+            if (e instanceof FetchError) {
+                const r = e.getResponse()
+                if (r && r.status >= 400 && r.status < 500) {
+                    throw e
+                }
+            }
+            if (attempt < maxRetries) {
+                const delay = 1000 * Math.pow(2, attempt) // 1s, 2s
+                await new Promise(resolve => setTimeout(resolve, delay))
+            }
+        }
+    }
+    throw lastError
 }
 
 export async function apiAuthenticate(api: Api): Promise<boolean> {
@@ -380,12 +441,12 @@ export async function apiAuthenticate(api: Api): Promise<boolean> {
 }
 
 export async function apiGetHosts(api: Api): Promise<Array<UndetailedHost>> {
-    const response = await fetchApi(api, "/hosts", "get")
+    const response = await fetchApiWithRetry(api, "/hosts", "get")
 
     return (response as GetHostsResponse).hosts
 }
 export async function apiGetHost(api: Api, query: GetHostQuery): Promise<DetailedHost> {
-    const response = await fetchApi(api, "/host", "get", { query })
+    const response = await fetchApiWithRetry(api, "/host", "get", { query })
 
     return (response as GetHostResponse).host
 }

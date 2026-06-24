@@ -9,3 +9,4 @@ export const WARN_IMAGE = buildUrl("/resources/baseline-warning-24px.svg")
 export const ERROR_IMAGE = buildUrl("/resources/baseline-error_outline-24px.svg")
 
 export const APP_NO_IMAGE = buildUrl("/resources/no_app_image.png")
+export const TESLA_LOGO = buildUrl("/resources/tesla_logo.png")
