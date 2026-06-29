@@ -136,7 +136,8 @@ async fn put_host(
         },
         moonlight: host,
         app_images_cache: Default::default(),
-        active_stream: None,
+        active_stream: tokio::sync::watch::channel(None).0,
+        stream_lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
     }));
 
     drop(hosts);

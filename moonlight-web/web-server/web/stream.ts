@@ -279,6 +279,8 @@ class ViewerApp implements Component {
             if (this.canvasRenderer) {
                 this.canvasRenderer.setVideoTrack(data.track)
             }
+        } else if (data.type == "inputClientsChanged") {
+            this.sidebar.onInputClientsChanged(data.count)
         }
     }
 
@@ -1006,6 +1008,7 @@ class ViewerSidebar implements Component, Sidebar {
     private fullscreenButton = document.createElement("button")
     private brightnessSlider = document.createElement("input")
     private brightnessLabel = document.createElement("label")
+    private inputClientsIndicator = document.createElement("div")
 
     private mouseMode: SelectComponent
     private touchMode: SelectComponent
@@ -1173,6 +1176,11 @@ class ViewerSidebar implements Component, Sidebar {
         buildInfo.innerText = `Build: ${this.buildTag}`
         this.div.appendChild(buildInfo)
 
+        // Input-only device indicator (e.g. a phone attached via /input.html)
+        this.inputClientsIndicator.classList.add("sidebar-build-tag")
+        this.inputClientsIndicator.style.display = "none"
+        this.div.appendChild(this.inputClientsIndicator)
+
 
         // Select Mouse Mode
         this.mouseMode = new SelectComponent("mouseMode", [
@@ -1201,6 +1209,18 @@ class ViewerSidebar implements Component, Sidebar {
 
     onCapabilitiesChange(capabilities: StreamCapabilities) {
         this.touchMode.setOptionEnabled("touch", capabilities.touch)
+    }
+
+    onInputClientsChanged(count: number) {
+        if (count <= 0) {
+            this.inputClientsIndicator.style.display = "none"
+            return
+        }
+
+        this.inputClientsIndicator.style.display = ""
+        this.inputClientsIndicator.innerText = count == 1
+            ? "1 input-only device connected"
+            : `${count} input-only devices connected`
     }
 
     getScreenKeyboard(): ScreenKeyboard {

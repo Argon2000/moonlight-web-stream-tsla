@@ -538,7 +538,7 @@ impl StreamConnection {
             Box::new(move |channel| {
                 let this = this.clone();
                 Box::pin(async move {
-                    this.on_data_channel(channel).await;
+                    this.on_data_channel(0, channel).await;
                 })
             })
         });
@@ -796,8 +796,8 @@ impl StreamConnection {
     }
 
     // -- Data Channels
-    async fn on_data_channel(self: &Arc<Self>, channel: Arc<RTCDataChannel>) {
-        self.input.on_data_channel(self, channel).await;
+    async fn on_data_channel(self: &Arc<Self>, client_id: u32, channel: Arc<RTCDataChannel>) {
+        self.input.on_data_channel(client_id, self, channel).await;
     }
 
     // -- Input-only peers
@@ -831,7 +831,7 @@ impl StreamConnection {
             Box::new(move |channel| {
                 let this = this.clone();
                 Box::pin(async move {
-                    this.on_data_channel(channel).await;
+                    this.on_data_channel(client_id, channel).await;
                 })
             })
         });
@@ -861,7 +861,11 @@ impl StreamConnection {
             .map(from_webrtc_ice)
             .collect();
 
-        self.secondary_peers.write().await.insert(client_id, peer);
+        let count = {
+            let mut secondary_peers = self.secondary_peers.write().await;
+            secondary_peers.insert(client_id, peer);
+            secondary_peers.len() as u32
+        };
 
         self.ipc_sender
             .clone()
@@ -870,14 +874,49 @@ impl StreamConnection {
                 message: StreamServerMessage::WebRtcConfig { ice_servers },
             })
             .await;
+
+        self.broadcast_input_client_count(count).await;
     }
 
     /// Tears down the input-only peer for `client_id`, if any. Does not touch
     /// the primary AV connection or the shared MoonlightStream.
     async fn detach_input_peer(&self, client_id: u32) {
-        if let Some(peer) = self.secondary_peers.write().await.remove(&client_id) {
+        // Remove from the map and release the lock *before* closing the peer:
+        // `close()` tears down ICE/SRTP and can take a while, and holding the
+        // write lock across it would block every other call that needs this
+        // lock — including a concurrent `attach_input_peer` for a different
+        // client, which goes through the same serial IPC-message loop and
+        // would then be stuck waiting on this lock for as long as `close()`
+        // takes (or worse, if it never returns).
+        let peer = {
+            let mut secondary_peers = self.secondary_peers.write().await;
+            secondary_peers.remove(&client_id)
+        };
+
+        let count = if let Some(peer) = peer {
             let _ = peer.close().await;
             info!("[Stream]: detached input-only peer for client {client_id}");
+            Some(self.secondary_peers.read().await.len() as u32)
+        } else {
+            None
+        };
+
+        // Release any gamepad slots this client held, in case it never sent
+        // an explicit controller-removal message (e.g. an abrupt drop).
+        self.input.release_client_gamepads(client_id, self).await;
+
+        if let Some(count) = count {
+            self.broadcast_input_client_count(count).await;
+        }
+    }
+
+    /// Lets the primary (AV) client know how many input-only devices are
+    /// currently attached, so its UI can show an indicator.
+    async fn broadcast_input_client_count(&self, count: u32) {
+        if let Some(message) =
+            serialize_json(&StreamServerGeneralMessage::InputClientsChanged { count })
+        {
+            let _ = self.general_channel.send_text(message).await;
         }
     }
 

@@ -6,7 +6,8 @@ export type InputStreamInfoEvent = CustomEvent<
     { type: "stageStarting" | "stageComplete", stage: string } |
     { type: "stageFailed", stage: string, errorCode: number } |
     { type: "connected" } |
-    { type: "streamNotActive" } |
+    { type: "waitingForStream" } |
+    { type: "reconnecting" } |
     { type: "hostNotFound" } |
     { type: "error", message: string } |
     { type: "addDebugLine", line: string }
@@ -43,15 +44,23 @@ export class InputOnlyStream {
     private beforeUnloadHandler: (() => void) | null = null
 
     // -- Raw WebSocket
+    // The connection to the server is meant to be long-lived and outlive any
+    // number of primary-stream start/stop cycles: the server keeps us parked
+    // in a "waiting" state (see WaitingForStream below) rather than closing
+    // us, so an unexpected close here means a real network/server hiccup —
+    // worth retrying with backoff rather than giving up.
     private wsSendBuffer: Array<string> = []
     private wsConnectTimeout: ReturnType<typeof setTimeout> | null = null
+    private wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null
     private wsAttempt: number = 0
-    private readonly WS_MAX_ATTEMPTS = 10
+    private intentionalClose = false
+    private readonly WS_MAX_ATTEMPTS = 20
     private readonly WS_CONNECT_TIMEOUT_MS = 5000
+    private readonly WS_RECONNECT_BASE_DELAY_MS = 500
+    private readonly WS_RECONNECT_MAX_DELAY_MS = 15000
 
     private connectWebSocket() {
         this.wsAttempt++
-        const attempt = this.wsAttempt
 
         const wsUrl = `${this.api.host_url}/host/stream?_t=${Date.now()}`
         this.ws = new WebSocket(wsUrl)
@@ -70,13 +79,8 @@ export class InputOnlyStream {
 
         this.wsConnectTimeout = setTimeout(() => {
             this.wsConnectTimeout = null
+            // Triggers onWsClose, which schedules the actual retry.
             this.ws.close()
-
-            if (this.wsAttempt < this.WS_MAX_ATTEMPTS) {
-                setTimeout(() => this.connectWebSocket(), 0)
-            } else {
-                this.dispatchError(`WebSocket connection timed out (all ${this.WS_MAX_ATTEMPTS} retries exhausted)`)
-            }
         }, this.WS_CONNECT_TIMEOUT_MS)
     }
 
@@ -85,22 +89,36 @@ export class InputOnlyStream {
             clearTimeout(this.wsConnectTimeout)
             this.wsConnectTimeout = null
         }
+        this.wsAttempt = 0
 
         for (const raw of this.wsSendBuffer.splice(0)) {
             this.ws.send(raw)
         }
     }
     private onWsClose() {
-        if (this.wsAttempt < this.WS_MAX_ATTEMPTS && this.wsConnectTimeout === null) {
-            // Closed by our timeout handler, retry is pending — suppress error
+        if (this.intentionalClose) {
             return
         }
 
-        if (this.peer && this.peer.connectionState === "connected") {
-            this.dispatchError("Stream session ended (host disconnected)")
-        } else {
-            this.dispatchError("WebSocket closed before attaching to the stream")
+        this.teardownPeer()
+        this.scheduleReconnect()
+    }
+    private scheduleReconnect() {
+        if (this.wsReconnectTimeout !== null) {
+            return
         }
+        if (this.wsAttempt >= this.WS_MAX_ATTEMPTS) {
+            this.dispatchError(`Lost connection to the server (all ${this.WS_MAX_ATTEMPTS} reconnect attempts exhausted)`)
+            return
+        }
+
+        this.dispatch({ type: "reconnecting" })
+
+        const delay = Math.min(this.WS_RECONNECT_BASE_DELAY_MS * 2 ** this.wsAttempt, this.WS_RECONNECT_MAX_DELAY_MS)
+        this.wsReconnectTimeout = setTimeout(() => {
+            this.wsReconnectTimeout = null
+            this.connectWebSocket()
+        }, delay)
     }
 
     private sendWsMessage(message: StreamClientMessage) {
@@ -143,8 +161,11 @@ export class InputOnlyStream {
             this.dispatch({ type: "stageFailed", stage: message.StageFailed.stage, errorCode: message.StageFailed.error_code })
         } else if ("HostNotFound" in message) {
             this.dispatch({ type: "hostNotFound" })
-        } else if ("StreamNotActive" in message) {
-            this.dispatch({ type: "streamNotActive" })
+        } else if ("WaitingForStream" in message) {
+            // Sent both before the first attach and again after the primary
+            // stream restarts — either way our old peer (if any) is now dead.
+            this.teardownPeer()
+            this.dispatch({ type: "waitingForStream" })
         } else if ("WebRtcConfig" in message) {
             await this.createPeer({
                 iceServers: message.WebRtcConfig.ice_servers
@@ -211,7 +232,11 @@ export class InputOnlyStream {
 
             this.dispatch({ type: "connected" })
         } else if (this.peer.connectionState == "failed" || this.peer.connectionState == "closed") {
-            this.dispatchError(`Connection state is ${this.peer.connectionState}`)
+            // Expected when the primary stream ends (the streamer process that
+            // hosted this peer exits) — the server will send WaitingForStream
+            // and we'll get a fresh peer once a stream is available again.
+            this.teardownPeer()
+            this.dispatch({ type: "waitingForStream" })
         }
     }
 
@@ -370,7 +395,28 @@ export class InputOnlyStream {
         return this.peer
     }
 
+    // Tears down the current peer (if any) so a future WebRtcConfig creates a
+    // fresh one, without touching the WebSocket connection to the server.
+    private teardownPeer() {
+        if (this.peer) {
+            this.peer.close()
+            this.peer = null
+        }
+        this.remoteDescription = null
+        this.iceCandidateQueue = []
+        this.makingOffer = false
+    }
+
     close() {
+        this.intentionalClose = true
+        if (this.wsConnectTimeout !== null) {
+            clearTimeout(this.wsConnectTimeout)
+            this.wsConnectTimeout = null
+        }
+        if (this.wsReconnectTimeout !== null) {
+            clearTimeout(this.wsReconnectTimeout)
+            this.wsReconnectTimeout = null
+        }
         if (this.beforeUnloadHandler) {
             window.removeEventListener("beforeunload", this.beforeUnloadHandler)
             this.beforeUnloadHandler = null

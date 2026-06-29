@@ -7,7 +7,7 @@
 //! - Toggle "Start minimized" (registry-based)
 //! - Exit the application
 
-use log::{info, warn};
+use log::{info, warn, debug};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tray_icon::{
@@ -235,6 +235,24 @@ fn copy_url_to_clipboard() {
     }
 }
 
+fn kill_streamer_processes() {
+    // Kill any running Streamer.exe processes when exiting
+    match std::process::Command::new("taskkill")
+        .args(&["/IM", "Streamer.exe", "/F"])
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                info!("[Tray] Killed Streamer.exe process");
+            } else {
+                // taskkill returns non-zero if no process is found, which is fine
+                debug!("[Tray] Streamer.exe process not running or already terminated");
+            }
+        }
+        Err(e) => warn!("[Tray] Failed to kill Streamer.exe: {e}"),
+    }
+}
+
 fn run_tray_loop(exit_signal: Arc<AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {
     let icon = create_icon().map_err(|e| format!("failed to create tray icon: {e}"))?;
 
@@ -318,6 +336,8 @@ fn run_tray_loop(exit_signal: Arc<AtomicBool>) -> Result<(), Box<dyn std::error:
                 start_min.set_checked(new_state);
             } else if event.id() == &quit_id {
                 exit_signal.store(true, Ordering::Relaxed);
+                // Kill any running Streamer.exe processes before exiting
+                kill_streamer_processes();
                 std::process::exit(0);
             }
         }

@@ -2,7 +2,7 @@
 export type TextEvent = CustomEvent<{ text: string }>
 export type KeyboardModeEvent = CustomEvent<{ enabled: boolean }>
 
-const KEYBOARD_SENTINEL = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const KEYBOARD_SENTINEL = " "
 
 export class ScreenKeyboard {
 

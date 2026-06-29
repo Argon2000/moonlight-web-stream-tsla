@@ -27,6 +27,7 @@ export type InfoEvent = CustomEvent<
     { type: "connectionStatus", status: ConnectionStatus } |
     { type: "connectionTerminated", errorCode: number } |
     { type: "connectionRecovered" } |
+    { type: "inputClientsChanged", count: number } |
     { type: "addDebugLine", line: string } |
     { type: "videoTrack", track: MediaStreamTrack}
 >
@@ -687,6 +688,12 @@ export class Stream {
         } else if ("ConnectionStatusUpdate" in message) {
             const event: InfoEvent = new CustomEvent("stream-info", {
                 detail: { type: "connectionStatus", status: message.ConnectionStatusUpdate.status }
+            })
+
+            this.eventTarget.dispatchEvent(event)
+        } else if ("InputClientsChanged" in message) {
+            const event: InfoEvent = new CustomEvent("stream-info", {
+                detail: { type: "inputClientsChanged", count: message.InputClientsChanged.count }
             })
 
             this.eventTarget.dispatchEvent(event)

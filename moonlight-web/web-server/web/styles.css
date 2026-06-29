@@ -682,10 +682,99 @@ video.video-stream.video-stream-stretched {
 }
 
 .hiddeninput {
-    position: absolute;
-    z-index: -1000;
+    position: fixed;
+    width: 1px;
+    height: 1px;
+    bottom: -9999px;
+    right: -9999px;
+    z-index: -9999;
+    opacity: 0;
+    pointer-events: none;
     resize: none;
-    translate: 200vw 200vh;
+    border: none;
+}
+
+/** Input-only page (input.html) */
+
+/* The dummy `#input` element doubles here as the visible input surface — the
+   whole area below the toolbar. Touches/clicks anywhere on it are sent to the
+   host; touches on the toolbar (a separate, fixed-position sibling on top of
+   it) never reach it, so the buttons can't also register as clicks.
+
+   Position and height are set by JavaScript (input.ts) to account for the
+   toolbar's actual height and viewport changes (e.g., soft keyboard appearing
+   on mobile). This ensures the toolbar buttons stay accessible even when the
+   soft keyboard appears/disappears. */
+.input-only-surface {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    z-index: 0;
+    background-image: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.05) 0 2px, transparent 2px 16px);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    overflow: hidden;
+}
+
+.input-only-surface-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 80vw;
+    padding: 0 24px;
+    text-align: center;
+    font-size: 1rem;
+    color: rgba(255, 255, 255, 0.45);
+    pointer-events: none;
+}
+
+/* Deliberately NOT positioned: the screen keyboard's hidden textarea is
+   appended into this div and relies on escaping to the viewport as its
+   containing block (see .hiddeninput's `translate: 200vw 200vh`) — giving
+   this element `position` would make it that containing block instead and
+   pull the "hidden" textarea back on screen. The toolbar below carries its
+   own `position: fixed` and z-index, which is all the stacking control
+   that's actually needed here. */
+.input-only-app {
+}
+
+.input-only-toolbar {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+    color: white;
+    background: rgba(20, 20, 20, 0.92);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.input-only-status {
+    font-size: 1rem;
+}
+
+.input-only-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.input-only-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 6px;
 }
 
 /* Prevent starting animation for elements */

@@ -8,7 +8,7 @@ license = { workspace = true }
 moonlight-common = { workspace = true, features = ["high", "backend_reqwest"] }
 common = { path = "../common" }
 
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "macros", "time"] }
 
 actix-web = { workspace = true, features = ["openssl"] }
 openssl = { workspace = true }

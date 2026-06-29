@@ -15,6 +15,7 @@ use tokio::{
     sync::{
         Mutex, RwLock,
         mpsc::{Receiver, Sender, channel},
+        watch,
     },
 };
 
@@ -55,7 +56,15 @@ pub struct RuntimeApiHost {
     pub cache: HostCache,
     pub moonlight: ReqwestMoonlightHost,
     pub app_images_cache: HashMap<u32, Bytes>,
-    pub active_stream: Option<Arc<Mutex<ActiveStream>>>,
+    /// `None` while no primary (AV) stream is running for this host. Input-only
+    /// clients subscribe to this and wait for it to become `Some` instead of
+    /// failing outright, so it doesn't matter whether they connect before or
+    /// after the primary stream.
+    pub active_stream: watch::Sender<Option<Arc<Mutex<ActiveStream>>>>,
+    /// Serializes starting/restarting a stream for this host, so e.g. two
+    /// input-only clients connecting at the same moment with no active stream
+    /// don't both decide to spawn a placeholder streamer process.
+    pub stream_lifecycle: Arc<Mutex<()>>,
 }
 
 impl RuntimeApiHost {
@@ -120,7 +129,8 @@ impl RuntimeApiData {
                 cache: host_data.cache,
                 moonlight: host,
                 app_images_cache: Default::default(),
-                active_stream: None,
+                active_stream: watch::channel(None).0,
+                stream_lifecycle: Arc::new(Mutex::new(())),
             })
         }))
         .await;

@@ -280,8 +280,14 @@ export class StreamInput {
         trySendChannel(this.mouseRelative, this.buffer)
     }
     sendMouseMoveClientCoordinates(movementX: number, movementY: number, rect: DOMRect) {
-        const scaledMovementX = movementX / rect.width * this.streamerSize[0];
-        const scaledMovementY = movementY / rect.height * this.streamerSize[1];
+        // Use screen diagonal as reference for consistent mouse movement across orientations.
+        // Same physical drag distance = same mouse movement, whether phone is portrait or landscape.
+        // Diagonal is orientation-independent: portrait and landscape have similar diagonals
+        // even though their width/height ratios are opposite.
+        const screenDiagonal = Math.sqrt(rect.width * rect.width + rect.height * rect.height);
+        const SENSITIVITY_MULTIPLIER = 1.3; // Responsive dragging that works in both orientations
+        const scaledMovementX = (movementX / screenDiagonal) * this.streamerSize[0] * SENSITIVITY_MULTIPLIER;
+        const scaledMovementY = (movementY / screenDiagonal) * this.streamerSize[1] * SENSITIVITY_MULTIPLIER;
 
         this.sendMouseMove(scaledMovementX, scaledMovementY)
     }
@@ -684,6 +690,18 @@ export class StreamInput {
             if (gamepad) {
                 this.onGamepadConnect(gamepad)
             }
+        }
+
+        // Gamepads already in `this.gamepads` were registered against a
+        // *previous* peer's "controllers" channel (e.g. before a stream
+        // reconnect). `setPeer()` always creates a brand new "controllers"
+        // channel, which has no memory of that registration, but polling
+        // keeps sending raw input for them on a freshly-recreated per-gamepad
+        // channel regardless — so without re-announcing here, the host would
+        // see input for a gamepad it never heard arrive, forever.
+        for (const [, entry] of this.gamepads) {
+            this.addDebugLog(`Re-announcing already-registered controller "${entry.gamepadId}" (internal ID ${entry.internalId}) to new peer`)
+            this.sendControllerAdd(entry.internalId, SUPPORTED_BUTTONS, 0)
         }
     }
 

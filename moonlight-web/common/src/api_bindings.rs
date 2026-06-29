@@ -300,9 +300,10 @@ pub enum StreamServerMessage {
     AppNotFound,
     HostNotPaired,
     AlreadyStreaming,
-    /// Returned to a client that requested `AuthenticateAndAttachInput` for a
-    /// host with no currently active stream to attach to.
-    StreamNotActive,
+    /// Sent to an input-only client (`AuthenticateAndAttachInput`) while no
+    /// primary stream is active for the host yet. The client stays connected
+    /// and is attached automatically once a primary stream starts.
+    WaitingForStream,
     StageStarting {
         stage: String,
     },
@@ -346,6 +347,9 @@ impl From<moonlight_common::stream::bindings::ConnectionStatus> for ConnectionSt
 pub enum StreamServerGeneralMessage {
     ConnectionTerminated,
     ConnectionStatusUpdate { status: ConnectionStatus },
+    /// Sent to the primary (AV) client whenever an input-only client attaches
+    /// or detaches, so the UI can show how many input devices are connected.
+    InputClientsChanged { count: u32 },
 }
 
 // Virtual-Key Codes

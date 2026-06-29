@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use log::{debug, warn};
@@ -21,6 +21,12 @@ const DEFAULT_CONTROLLER_CAPABILITIES: ControllerCapabilities = ControllerCapabi
 pub struct StreamInput {
     pub(crate) active_gamepads: RwLock<ActiveGamepads>,
     controllers: RwLock<Option<Arc<RTCDataChannel>>>,
+    /// Maps (client_id, client-local gamepad id) -> globally allocated Sunshine
+    /// controller slot. Each attached client (the primary AV peer or any
+    /// attached input-only peer) numbers its own gamepads from 0 independently
+    /// in its own browser tab, so without this indirection two different
+    /// phones' "gamepad 0" would collide into the same Sunshine controller.
+    gamepad_slots: RwLock<HashMap<(u32, u8), u8>>,
 }
 
 impl StreamInput {
@@ -28,12 +34,87 @@ impl StreamInput {
         Self {
             active_gamepads: RwLock::new(ActiveGamepads::empty()),
             controllers: Default::default(),
+            gamepad_slots: Default::default(),
+        }
+    }
+
+    /// Allocates (or returns the existing) global Sunshine controller slot for
+    /// `client_id`'s locally-numbered gamepad `local_id`. Returns `None` if all
+    /// 16 slots are already taken.
+    async fn allocate_gamepad_slot(&self, client_id: u32, local_id: u8) -> Option<(u8, ActiveGamepads)> {
+        let mut slots = self.gamepad_slots.write().await;
+        if let Some(&slot) = slots.get(&(client_id, local_id)) {
+            return Some((slot, *self.active_gamepads.read().await));
+        }
+
+        let mut active_gamepads = self.active_gamepads.write().await;
+        for slot in 0u8..16 {
+            let Some(slot_mask) = ActiveGamepads::from_id(slot) else {
+                continue;
+            };
+            if !active_gamepads.contains(slot_mask) {
+                active_gamepads.insert(slot_mask);
+                slots.insert((client_id, local_id), slot);
+                return Some((slot, *active_gamepads));
+            }
+        }
+
+        None
+    }
+
+    /// Releases the global slot (if any) allocated for `client_id`'s local
+    /// gamepad `local_id`, clearing it from `active_gamepads`.
+    async fn release_gamepad_slot(&self, client_id: u32, local_id: u8) -> Option<(u8, ActiveGamepads)> {
+        let mut slots = self.gamepad_slots.write().await;
+        let slot = slots.remove(&(client_id, local_id))?;
+        let slot_mask = ActiveGamepads::from_id(slot)?;
+
+        let mut active_gamepads = self.active_gamepads.write().await;
+        active_gamepads.remove(slot_mask);
+        Some((slot, *active_gamepads))
+    }
+
+    async fn lookup_gamepad_slot(&self, client_id: u32, local_id: u8) -> Option<u8> {
+        self.gamepad_slots.read().await.get(&(client_id, local_id)).copied()
+    }
+
+    /// Releases every gamepad slot belonging to `client_id`, notifying Sunshine
+    /// that each one disconnected. Called when an input-only client detaches
+    /// (e.g. its WebSocket/WebRTC connection drops) without having sent an
+    /// explicit controller-removal message first.
+    pub async fn release_client_gamepads(&self, client_id: u32, connection: &StreamConnection) {
+        let local_ids: Vec<u8> = {
+            let slots = self.gamepad_slots.read().await;
+            slots
+                .keys()
+                .filter(|(cid, _)| *cid == client_id)
+                .map(|&(_, local_id)| local_id)
+                .collect()
+        };
+
+        for local_id in local_ids {
+            if let Some((slot, active_gamepads)) = self.release_gamepad_slot(client_id, local_id).await
+                && let Some(stream) = connection.stream.read().await.as_ref()
+            {
+                let _ = stream.send_multi_controller(
+                    slot,
+                    active_gamepads,
+                    ControllerButtons::empty(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                );
+            }
         }
     }
 
     /// Returns if this added events
     pub async fn on_data_channel(
         &self,
+        client_id: u32,
         connection: &Arc<StreamConnection>,
         data_channel: Arc<RTCDataChannel>,
     ) -> bool {
@@ -71,7 +152,7 @@ impl StreamInput {
                     let connection = connection.clone();
 
                     Box::pin(async move {
-                        Self::on_controller_message(message, &connection).await;
+                        Self::on_controller_message(client_id, message, &connection).await;
                     })
                 }));
 
@@ -84,14 +165,14 @@ impl StreamInput {
         };
 
         if let Some(number) = label.strip_prefix("controller")
-            && let Ok(id) = number.parse()
+            && let Ok(local_id) = number.parse::<u8>()
         {
             let connection = connection.clone();
             data_channel.on_message(Box::new(move |message| {
                 let connection = connection.clone();
 
                 Box::pin(async move {
-                    Self::on_controller_input_message(id, message, &connection).await;
+                    Self::on_controller_input_message(client_id, local_id, message, &connection).await;
                 })
             }));
 
@@ -292,29 +373,31 @@ impl StreamInput {
         }
     }
 
-    async fn on_controller_message(message: DataChannelMessage, connection: &StreamConnection) {
+    async fn on_controller_message(client_id: u32, message: DataChannelMessage, connection: &StreamConnection) {
         let mut buffer = ByteBuffer::new(message.data);
 
         let ty = buffer.get_u8();
         if ty == 0 {
-            let id = buffer.get_u8();
+            let local_id = buffer.get_u8();
             let supported_buttons = ControllerButtons::from_bits(buffer.get_u32())
                 .unwrap_or(DEFAULT_CONTROLLER_BUTTONS);
             let capabilities = ControllerCapabilities::from_bits(buffer.get_u16())
                 .unwrap_or(DEFAULT_CONTROLLER_CAPABILITIES);
 
-            let Some(id_gamepads) = ActiveGamepads::from_id(id) else {
+            let Some((slot, active_gamepads)) = connection
+                .input
+                .allocate_gamepad_slot(client_id, local_id)
+                .await
+            else {
+                warn!(
+                    "[Stream Input]: no free Sunshine controller slots for client {client_id} local gamepad {local_id}"
+                );
                 return;
-            };
-            let active_gamepads = {
-                let mut active_gamepads = connection.input.active_gamepads.write().await;
-                active_gamepads.insert(id_gamepads);
-                *active_gamepads
             };
 
             if let Some(stream) = connection.stream.read().await.as_ref() {
                 let _ = stream.send_controller_arrival(
-                    id,
+                    slot,
                     active_gamepads,
                     ControllerType::Unknown,
                     supported_buttons,
@@ -322,21 +405,17 @@ impl StreamInput {
                 );
             }
         } else if ty == 1 {
-            let id = buffer.get_u8();
+            let local_id = buffer.get_u8();
 
-            let Some(id_gamepads) = ActiveGamepads::from_id(id) else {
-                return;
-            };
-            let new_active_gamepads = {
-                let mut active_gamepads = connection.input.active_gamepads.write().await;
-                active_gamepads.remove(id_gamepads);
-                *active_gamepads
-            };
-
-            if let Some(stream) = connection.stream.read().await.as_ref() {
+            if let Some((slot, active_gamepads)) = connection
+                .input
+                .release_gamepad_slot(client_id, local_id)
+                .await
+                && let Some(stream) = connection.stream.read().await.as_ref()
+            {
                 let _ = stream.send_multi_controller(
-                    id,
-                    new_active_gamepads,
+                    slot,
+                    active_gamepads,
                     ControllerButtons::empty(),
                     0,
                     0,
@@ -349,7 +428,8 @@ impl StreamInput {
         }
     }
     async fn on_controller_input_message(
-        controller_id: u8,
+        client_id: u32,
+        local_id: u8,
         message: DataChannelMessage,
         connection: &StreamConnection,
     ) {
@@ -362,14 +442,19 @@ impl StreamInput {
 
         let ty = buffer.get_u8();
         if ty == 0 {
-            let Some(gamepad) = ActiveGamepads::from_id(controller_id) else {
-                warn!("[Stream Input]: Gamepad {controller_id} is not valid");
+            let Some(slot) = connection.input.lookup_gamepad_slot(client_id, local_id).await else {
+                warn!(
+                    "[Stream Input]: received controller input for unregistered gamepad (client {client_id}, local id {local_id})"
+                );
                 return;
             };
 
+            let Some(slot_mask) = ActiveGamepads::from_id(slot) else {
+                return;
+            };
             let active_gamepads = { *connection.input.active_gamepads.read().await };
-            if !active_gamepads.contains(gamepad) {
-                warn!("[Stream Input]: Gamepad {controller_id} not in active gamepad mask");
+            if !active_gamepads.contains(slot_mask) {
+                warn!("[Stream Input]: Gamepad slot {slot} not in active gamepad mask");
                 return;
             }
 
@@ -385,7 +470,7 @@ impl StreamInput {
             let right_stick_y = buffer.get_i16();
 
             let _ = stream.send_multi_controller(
-                controller_id,
+                slot,
                 active_gamepads,
                 buttons,
                 left_trigger,
